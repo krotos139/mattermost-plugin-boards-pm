@@ -17,6 +17,8 @@ import MultiSelectProperty from './multiselect/property'
 import DateProperty from './date/property'
 import PersonProperty from './person/property'
 import MultiPersonProperty from './multiperson/property'
+import PersonNotifyProperty from './personNotify/property'
+import MultiPersonNotifyProperty from './multipersonNotify/property'
 import CheckboxProperty from './checkbox/property'
 import UnknownProperty from './unknown/property'
 
@@ -57,6 +59,8 @@ registry.register(new MultiSelectProperty())
 registry.register(new DateProperty())
 registry.register(new PersonProperty())
 registry.register(new MultiPersonProperty())
+registry.register(new PersonNotifyProperty())
+registry.register(new MultiPersonNotifyProperty())
 registry.register(new CheckboxProperty())
 registry.register(new CreatedTimeProperty())
 registry.register(new CreatedByProperty())

@@ -113,6 +113,12 @@ func NewBoardsApp(api model.ServicesAPI, manifest *mm_model.Manifest) (*BoardsAp
 	}
 	notifyBackends = append(notifyBackends, mentionsBackend)
 
+	personBackend, err := createPersonNotifyBackend(backendParams)
+	if err != nil {
+		return nil, fmt.Errorf("error creating person-property notifications backend: %w", err)
+	}
+	notifyBackends = append(notifyBackends, personBackend)
+
 	subscriptionsBackend, err2 := createSubscriptionsNotifyBackend(backendParams)
 	if err2 != nil {
 		return nil, fmt.Errorf("error creating subscription notifications backend: %w", err2)

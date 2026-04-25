@@ -10,6 +10,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/config"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifymentions"
+	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifyperson"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifysubscriptions"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/plugindelivery"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/permissions"
@@ -42,6 +43,19 @@ func createMentionsNotifyBackend(params notifyBackendParams) (*notifymentions.Ba
 
 	backend := notifymentions.New(backendParams)
 
+	return backend, nil
+}
+
+func createPersonNotifyBackend(params notifyBackendParams) (*notifyperson.Backend, error) {
+	delivery, err := createDelivery(params.servicesAPI, params.serverRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	backend := notifyperson.New(notifyperson.BackendParams{
+		Delivery: delivery,
+		Logger:   params.logger,
+	})
 	return backend, nil
 }
 

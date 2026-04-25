@@ -32,6 +32,7 @@ const ConfirmPerson = (props: PropertyProps): JSX.Element => {
     const allowAddUsers = !me?.is_guest && (allowManageBoardRoles || board.type === BoardTypeOpen)
     const changePropertyValue = useCallback((newValue) => mutator.changePropertyValue(board.id, card, propertyTemplate.id, newValue), [board.id, card, propertyTemplate.id])
     const emptyDisplayValue = props.showEmptyPlaceholder ? intl.formatMessage({id: 'ConfirmPerson.empty', defaultMessage: 'Empty'}) : ''
+    const isMulti = propertyTemplate.type === 'multiPerson' || propertyTemplate.type === 'multiPersonNotify'
 
     let userIDs: string[] = []
     if (typeof propertyValue === 'string' && propertyValue !== '') {
@@ -86,12 +87,12 @@ const ConfirmPerson = (props: PropertyProps): JSX.Element => {
         setConfirmAddUser(null)
         await mutator.createBoardMember(newMember)
 
-        if (propertyTemplate.type === 'multiPerson') {
+        if (isMulti) {
             await mutator.changePropertyValue(board.id, card, propertyTemplate.id, [...userIDs, newMember.userId])
         } else {
             await mutator.changePropertyValue(board.id, card, propertyTemplate.id, newMember.userId)
         }
-    }, [board, card, propertyTemplate, userIDs])
+    }, [board, card, propertyTemplate, userIDs, isMulti])
 
     return (
         <>
@@ -106,7 +107,7 @@ const ConfirmPerson = (props: PropertyProps): JSX.Element => {
             <PersonSelector
                 userIDs={userIDs}
                 allowAddUsers={allowAddUsers}
-                isMulti={propertyTemplate.type === 'multiPerson'}
+                isMulti={isMulti}
                 readOnly={readOnly}
                 emptyDisplayValue={emptyDisplayValue}
                 property={property}
