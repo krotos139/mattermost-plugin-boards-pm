@@ -1620,6 +1620,35 @@ func (mr *MockStoreMockRecorder) UpdateSubscribersNotifiedAt(blockID, notifiedAt
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSubscribersNotifiedAt", reflect.TypeOf((*MockStore)(nil).UpdateSubscribersNotifiedAt), blockID, notifiedAt)
 }
 
+// IsDeadlineNotificationSent mocks base method.
+func (m *MockStore) IsDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsDeadlineNotificationSent", cardID, propertyID, deadlineAt)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsDeadlineNotificationSent indicates an expected call of IsDeadlineNotificationSent.
+func (mr *MockStoreMockRecorder) IsDeadlineNotificationSent(cardID, propertyID, deadlineAt interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsDeadlineNotificationSent", reflect.TypeOf((*MockStore)(nil).IsDeadlineNotificationSent), cardID, propertyID, deadlineAt)
+}
+
+// MarkDeadlineNotificationSent mocks base method.
+func (m *MockStore) MarkDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MarkDeadlineNotificationSent", cardID, propertyID, deadlineAt)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MarkDeadlineNotificationSent indicates an expected call of MarkDeadlineNotificationSent.
+func (mr *MockStoreMockRecorder) MarkDeadlineNotificationSent(cardID, propertyID, deadlineAt interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkDeadlineNotificationSent", reflect.TypeOf((*MockStore)(nil).MarkDeadlineNotificationSent), cardID, propertyID, deadlineAt)
+}
+
 // UpsertNotificationHint mocks base method.
 func (m *MockStore) UpsertNotificationHint(hint *model.NotificationHint, notificationFreq time.Duration) (*model.NotificationHint, error) {
 	m.ctrl.T.Helper()

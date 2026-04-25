@@ -922,3 +922,13 @@ func (s *SQLStore) UpsertTeamSignupToken(team model.Team) error {
 	return s.upsertTeamSignupToken(s.db, team)
 
 }
+
+func (s *SQLStore) IsDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) (bool, error) {
+	return s.isDeadlineNotificationSent(s.db, cardID, propertyID, deadlineAt)
+
+}
+
+func (s *SQLStore) MarkDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) error {
+	return s.markDeadlineNotificationSent(s.db, cardID, propertyID, deadlineAt)
+
+}

@@ -143,6 +143,9 @@ type Store interface {
 	GetNotificationHint(blockID string) (*model.NotificationHint, error)
 	GetNextNotificationHint(remove bool) (*model.NotificationHint, error)
 
+	IsDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) (bool, error)
+	MarkDeadlineNotificationSent(cardID string, propertyID string, deadlineAt int64) error
+
 	RemoveDefaultTemplates(boards []*model.Board) error
 	GetTemplateBoards(teamID, userID string) ([]*model.Board, error)
 

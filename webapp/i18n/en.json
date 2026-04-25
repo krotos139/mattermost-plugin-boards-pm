@@ -214,6 +214,7 @@
   "PropertyType.CreatedBy": "Created by",
   "PropertyType.CreatedTime": "Created time",
   "PropertyType.Date": "Date",
+  "PropertyType.Deadline": "Deadline",
   "PropertyType.Email": "Email",
   "PropertyType.MultiPerson": "Multi person",
   "PropertyType.MultiPersonNotify": "Multi person (notify)",

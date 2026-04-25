@@ -84,7 +84,7 @@ type BoardsAndBlocksPatch = {
     blockPatches: BlockPatch[]
 }
 
-type PropertyTypeEnum = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'person' | 'multiPerson' | 'personNotify' | 'multiPersonNotify' | 'file' | 'checkbox' | 'url' | 'email' | 'phone' | 'createdTime' | 'createdBy' | 'updatedTime' | 'updatedBy' | 'unknown'
+type PropertyTypeEnum = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'deadline' | 'person' | 'multiPerson' | 'personNotify' | 'multiPersonNotify' | 'file' | 'checkbox' | 'url' | 'email' | 'phone' | 'createdTime' | 'createdBy' | 'updatedTime' | 'updatedBy' | 'unknown'
 
 interface IPropertyOption {
     id: string
@@ -98,6 +98,10 @@ interface IPropertyTemplate {
     name: string
     type: PropertyTypeEnum
     options: IPropertyOption[]
+
+    // For type=deadline: minutes before the deadline to send a DM notification.
+    // Read on the server by the deadline ticker.
+    notifyOffsetMinutes?: number
 }
 
 function createBoard(board?: Board): Board {

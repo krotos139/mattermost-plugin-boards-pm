@@ -9,6 +9,7 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/config"
+	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifydeadline"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifymentions"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifyperson"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifysubscriptions"
@@ -77,6 +78,20 @@ func createSubscriptionsNotifyBackend(params notifyBackendParams) (*notifysubscr
 	backend := notifysubscriptions.New(backendParams)
 
 	return backend, nil
+}
+
+func createDeadlineService(params notifyBackendParams, db store.Store) (*notifydeadline.Service, error) {
+	delivery, err := createDelivery(params.servicesAPI, params.serverRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	service := notifydeadline.New(notifydeadline.Params{
+		Store:    db,
+		Delivery: delivery,
+		Logger:   params.logger,
+	})
+	return service, nil
 }
 
 func createDelivery(servicesAPI model.ServicesAPI, serverRoot string) (*plugindelivery.PluginDelivery, error) {

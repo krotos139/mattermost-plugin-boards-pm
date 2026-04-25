@@ -145,7 +145,9 @@ const CardDetailProperties = (props: Props) => {
                                     propertyId={propertyTemplate.id}
                                     propertyName={propertyTemplate.name}
                                     propertyType={propRegistry.get(propertyTemplate.type)}
+                                    notifyOffsetMinutes={propertyTemplate.notifyOffsetMinutes}
                                     onTypeAndNameChanged={(newType: PropertyType, newName: string) => onPropertyChangeSetAndOpenConfirmationDialog(newType, newName, propertyTemplate)}
+                                    onNotifyOffsetChanged={(minutes: number) => mutator.changePropertyNotifyOffset(board, propertyTemplate.id, minutes)}
                                     onDelete={() => onPropertyDeleteSetAndOpenConfirmationDialog(propertyTemplate)}
                                 />
                             </MenuWrapper>

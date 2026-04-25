@@ -4,6 +4,7 @@
 package boards
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/server"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify"
+	"github.com/mattermost/mattermost-plugin-boards/server/services/notify/notifydeadline"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/permissions/mmpermissions"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/store"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/store/sqlstore"
@@ -56,6 +58,10 @@ type BoardsApp struct {
 
 	servicesAPI model.ServicesAPI
 	logger      mlog.LoggerIFace
+
+	// Background ticker that checks for upcoming deadlines and DMs assignees.
+	deadlineService *notifydeadline.Service
+	deadlineCancel  context.CancelFunc
 }
 
 func NewBoardsApp(api model.ServicesAPI, manifest *mm_model.Manifest) (*BoardsApp, error) {
@@ -126,6 +132,11 @@ func NewBoardsApp(api model.ServicesAPI, manifest *mm_model.Manifest) (*BoardsAp
 	notifyBackends = append(notifyBackends, subscriptionsBackend)
 	mentionsBackend.AddListener(subscriptionsBackend)
 
+	deadlineService, err := createDeadlineService(backendParams, db)
+	if err != nil {
+		return nil, fmt.Errorf("error creating deadline notification service: %w", err)
+	}
+
 	params := server.Params{
 		Cfg:                cfg,
 		SingleUserToken:    "",
@@ -166,6 +177,7 @@ func NewBoardsApp(api model.ServicesAPI, manifest *mm_model.Manifest) (*BoardsAp
 		wsPluginAdapter: wsPluginAdapter,
 		servicesAPI:     api,
 		logger:          logger,
+		deadlineService: deadlineService,
 	}, nil
 }
 
@@ -176,12 +188,22 @@ func (b *BoardsApp) Start() error {
 
 	b.servicesAPI.RegisterRouter(b.server.GetRootRouter())
 
+	if b.deadlineService != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		b.deadlineCancel = cancel
+		go b.deadlineService.Run(ctx)
+	}
+
 	b.logger.Info("Boards product successfully started.")
 
 	return nil
 }
 
 func (b *BoardsApp) Stop() error {
+	if b.deadlineCancel != nil {
+		b.deadlineCancel()
+		b.deadlineCancel = nil
+	}
 	return b.server.Shutdown()
 }
 

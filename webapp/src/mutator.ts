@@ -524,6 +524,19 @@ class Mutator {
         await this.updateBoard(newBoard, board, 'reorder properties')
     }
 
+    // Updates the `notifyOffsetMinutes` setting of a deadline-typed property.
+    // The deadline ticker on the server reads this value to decide when to DM.
+    async changePropertyNotifyOffset(board: Board, propertyId: string, minutes: number | undefined) {
+        const newBoard = createBoard(board)
+        newBoard.cardProperties = board.cardProperties.map((p: IPropertyTemplate) => {
+            if (p.id !== propertyId) {
+                return p
+            }
+            return {...p, notifyOffsetMinutes: minutes}
+        })
+        await this.updateBoard(newBoard, board, 'change notify offset')
+    }
+
     async deleteProperty(board: Board, views: BoardView[], cards: Card[], propertyId: string) {
         const newBoard = createBoard(board)
         newBoard.cardProperties = board.cardProperties.filter((o: IPropertyTemplate) => o.id !== propertyId)

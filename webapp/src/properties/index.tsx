@@ -15,6 +15,7 @@ import UrlProperty from './url/property'
 import SelectProperty from './select/property'
 import MultiSelectProperty from './multiselect/property'
 import DateProperty from './date/property'
+import DeadlineProperty from './deadline/property'
 import PersonProperty from './person/property'
 import MultiPersonProperty from './multiperson/property'
 import PersonNotifyProperty from './personNotify/property'
@@ -57,6 +58,7 @@ registry.register(new UrlProperty())
 registry.register(new SelectProperty())
 registry.register(new MultiSelectProperty())
 registry.register(new DateProperty())
+registry.register(new DeadlineProperty())
 registry.register(new PersonProperty())
 registry.register(new MultiPersonProperty())
 registry.register(new PersonNotifyProperty())
