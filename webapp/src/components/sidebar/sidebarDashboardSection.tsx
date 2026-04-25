@@ -12,6 +12,7 @@ import {getCurrentTeamId} from '../../store/teams'
 import {getMyDashboardBoards, updateBoards} from '../../store/boards'
 import {getCurrentBoardViews, getCurrentViewId} from '../../store/views'
 import {loadBoardData, loadMyBoardsMemberships} from '../../store/initialLoad'
+import {Board} from '../../blocks/board'
 import {BoardView, IViewType} from '../../blocks/boardView'
 import BoardIcon from '../../widgets/icons/board'
 import TableIcon from '../../widgets/icons/table'
@@ -32,6 +33,34 @@ const iconForViewType = (viewType: IViewType): JSX.Element => {
     }
 }
 
+type DashboardItem = {
+    kind: string
+    icon: string
+    titleId: string
+    titleDefault: string
+    refreshTitle: string
+}
+
+const dashboardItems: DashboardItem[] = [
+    {
+        kind: 'deadlines',
+        icon: '\u{1F3C1}',
+        titleId: 'Sidebar.dashboard-deadlines',
+        titleDefault: 'My Deadlines',
+        refreshTitle: 'Refresh deadlines',
+    },
+    {
+        kind: 'allTasks',
+        icon: '\u{1F4CB}',
+        titleId: 'Sidebar.dashboard-all-tasks',
+        titleDefault: 'All Tasks',
+        refreshTitle: 'Refresh tasks',
+    },
+]
+
+const findDashboard = (boards: Board[], kind: string): Board | undefined =>
+    boards.find((b) => (b.properties as Record<string, unknown> | undefined)?.dashboardKind === kind)
+
 type Props = {
     activeBoardID?: string
 }
@@ -47,9 +76,6 @@ const SidebarDashboardSection = (props: Props): JSX.Element | null => {
     const match = useRouteMatch<{boardId: string, viewId?: string, cardId?: string, teamId?: string}>()
 
     const [openingKind, setOpeningKind] = useState<string | null>(null)
-
-    const myDeadlines = dashboards.find((b) => (b.properties as Record<string, unknown> | undefined)?.dashboardKind === 'deadlines')
-    const isActive = Boolean(myDeadlines && myDeadlines.id === props.activeBoardID)
 
     const showView = useCallback((viewId: string, boardId: string) => {
         const params = {...match.params, boardId: boardId || '', viewId: viewId || ''}
@@ -90,50 +116,58 @@ const SidebarDashboardSection = (props: Props): JSX.Element | null => {
                     defaultMessage='DASHBOARD'
                 />
             </div>
-            <div
-                className={`SidebarBoardItem subitem dashboard-item ${isActive ? 'active' : ''}`}
-                onClick={() => openOrCreate('deadlines')}
-                role='button'
-            >
-                <div className='octo-sidebar-icon'>{'\u{1F3C1}'}</div>
-                <div
-                    className='octo-sidebar-title'
-                    title='My Deadlines'
-                >
-                    <FormattedMessage
-                        id='Sidebar.dashboard-deadlines'
-                        defaultMessage='My Deadlines'
-                    />
-                </div>
-                {myDeadlines &&
-                    <button
-                        className='dashboard-refresh'
-                        title='Refresh deadlines'
-                        aria-label='Refresh deadlines'
-                        onClick={(e) => {
-                            e.stopPropagation()
-                            dispatch(loadBoardData(myDeadlines.id))
-                        }}
-                    >
-                        {'\u21bb'}
-                    </button>}
-                {openingKind === 'deadlines' && <div className='spinner'/>}
-            </div>
-            {isActive && myDeadlines && boardViews.map((view: BoardView) => (
-                <div
-                    key={view.id}
-                    className={`SidebarBoardItem sidebar-view-item ${view.id === currentViewId ? 'active' : ''}`}
-                    onClick={() => showView(view.id, myDeadlines.id)}
-                >
-                    {iconForViewType(view.fields.viewType)}
-                    <div
-                        className='octo-sidebar-title'
-                        title={view.title || intl.formatMessage({id: 'Sidebar.untitled-view', defaultMessage: '(Untitled View)'})}
-                    >
-                        {view.title || intl.formatMessage({id: 'Sidebar.untitled-view', defaultMessage: '(Untitled View)'})}
-                    </div>
-                </div>
-            ))}
+            {dashboardItems.map((item) => {
+                const board = findDashboard(dashboards, item.kind)
+                const isActive = Boolean(board && board.id === props.activeBoardID)
+                return (
+                    <React.Fragment key={item.kind}>
+                        <div
+                            className={`SidebarBoardItem subitem dashboard-item ${isActive ? 'active' : ''}`}
+                            onClick={() => openOrCreate(item.kind)}
+                            role='button'
+                        >
+                            <div className='octo-sidebar-icon'>{item.icon}</div>
+                            <div
+                                className='octo-sidebar-title'
+                                title={item.titleDefault}
+                            >
+                                <FormattedMessage
+                                    id={item.titleId}
+                                    defaultMessage={item.titleDefault}
+                                />
+                            </div>
+                            {board &&
+                                <button
+                                    className='dashboard-refresh'
+                                    title={item.refreshTitle}
+                                    aria-label={item.refreshTitle}
+                                    onClick={(e) => {
+                                        e.stopPropagation()
+                                        dispatch(loadBoardData(board.id))
+                                    }}
+                                >
+                                    {'\u21bb'}
+                                </button>}
+                            {openingKind === item.kind && <div className='spinner'/>}
+                        </div>
+                        {isActive && board && boardViews.map((view: BoardView) => (
+                            <div
+                                key={view.id}
+                                className={`SidebarBoardItem sidebar-view-item ${view.id === currentViewId ? 'active' : ''}`}
+                                onClick={() => showView(view.id, board.id)}
+                            >
+                                {iconForViewType(view.fields.viewType)}
+                                <div
+                                    className='octo-sidebar-title'
+                                    title={view.title || intl.formatMessage({id: 'Sidebar.untitled-view', defaultMessage: '(Untitled View)'})}
+                                >
+                                    {view.title || intl.formatMessage({id: 'Sidebar.untitled-view', defaultMessage: '(Untitled View)'})}
+                                </div>
+                            </div>
+                        ))}
+                    </React.Fragment>
+                )
+            })}
         </div>
     )
 }

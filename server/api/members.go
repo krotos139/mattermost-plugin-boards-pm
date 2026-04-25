@@ -88,6 +88,37 @@ func (a *API) handleGetMembersForBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dashboard boards (e.g. "All Tasks") have only the owning user as a real
+	// member — but their virtual cards reference assignees from many other
+	// boards. Without those user IDs in the member list, the frontend renders
+	// blank Assignees cells and the filter dropdown can't offer them. Synthesize
+	// viewer members for every assignee that appears on the dashboard so name
+	// resolution and filtering work.
+	if board.DashboardKind() != "" {
+		existing := make(map[string]struct{}, len(members))
+		for _, m := range members {
+			existing[m.UserID] = struct{}{}
+		}
+		assigneeIDs, aerr := a.app.CollectDashboardAssigneeUserIDs(board, userID)
+		if aerr != nil {
+			a.logger.Warn("dashboard: cannot collect assignee IDs",
+				mlog.String("boardID", boardID),
+				mlog.Err(aerr),
+			)
+		}
+		for _, uid := range assigneeIDs {
+			if _, ok := existing[uid]; ok {
+				continue
+			}
+			members = append(members, &model.BoardMember{
+				BoardID:      boardID,
+				UserID:       uid,
+				SchemeViewer: true,
+				Synthetic:    true,
+			})
+		}
+	}
+
 	a.logger.Debug("GetMembersForBoard",
 		mlog.String("boardID", boardID),
 		mlog.Int("membersCount", len(members)),

@@ -11,6 +11,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
@@ -25,6 +26,8 @@ const (
 	DashboardPropIDDeadline  = "dash_deadline"
 	DashboardPropIDStatus    = "dash_status"
 	DashboardPropIDDaysUntil = "dash_days_until"
+	DashboardPropIDAssignees = "dash_assignees"
+	DashboardPropIDUpdated   = "dash_updated"
 
 	// Synthetic block field keys — used by frontend to navigate to original card.
 	dashboardSourceBoardField = "originalBoardId"
@@ -35,11 +38,18 @@ const (
 
 	// Source-board property types we recognize.
 	deadlinePropType          = "deadline"
+	personPropType            = "person"
+	multiPersonPropType       = "multiPerson"
 	personNotifyPropType      = "personNotify"
 	multiPersonNotifyPropType = "multiPersonNotify"
 	selectPropType            = "select"
 
 	msPerDay = 24 * 60 * 60 * 1000
+
+	// Hard cap on the number of cards an "All Tasks" dashboard returns.
+	// Keeps the response size bounded; cards are sorted by UpdateAt DESC so
+	// the most recent ones survive the cut.
+	allTasksMaxCards = 5000
 )
 
 // dashboardCardProperties returns the fixed set of synthetic properties for
@@ -54,6 +64,13 @@ func dashboardCardProperties(kind string) []map[string]interface{} {
 			{"id": DashboardPropIDStatus, "name": "Status", "type": "text", "options": []interface{}{}},
 			{"id": DashboardPropIDDaysUntil, "name": "Days until", "type": "number", "options": []interface{}{}},
 		}
+	case model.DashboardKindAllTasks:
+		return []map[string]interface{}{
+			{"id": DashboardPropIDBoard, "name": "Board", "type": "text", "options": []interface{}{}},
+			{"id": DashboardPropIDStatus, "name": "Status", "type": "text", "options": []interface{}{}},
+			{"id": DashboardPropIDAssignees, "name": "Assignees", "type": "multiPerson", "options": []interface{}{}},
+			{"id": DashboardPropIDUpdated, "name": "Updated", "type": "updatedTime", "options": []interface{}{}},
+		}
 	}
 	return nil
 }
@@ -62,6 +79,8 @@ func dashboardTitle(kind string) string {
 	switch kind {
 	case model.DashboardKindDeadlines:
 		return "My Deadlines"
+	case model.DashboardKindAllTasks:
+		return "All Tasks"
 	}
 	return "Dashboard"
 }
@@ -70,6 +89,8 @@ func dashboardIcon(kind string) string {
 	switch kind {
 	case model.DashboardKindDeadlines:
 		return "🏁"
+	case model.DashboardKindAllTasks:
+		return "📋"
 	}
 	return "📊"
 }
@@ -130,6 +151,16 @@ func (a *App) GetOrCreateDashboardBoard(userID string, teamID string, kind strin
 
 func defaultDashboardView(boardID string, kind string, userID string) *model.Block {
 	now := utils.GetMillis()
+	var sortOptions []interface{}
+	var visibleProps []interface{}
+	switch kind {
+	case model.DashboardKindAllTasks:
+		sortOptions = []interface{}{map[string]interface{}{"propertyId": DashboardPropIDUpdated, "reversed": true}}
+		visibleProps = []interface{}{DashboardPropIDBoard, DashboardPropIDStatus, DashboardPropIDAssignees, DashboardPropIDUpdated}
+	default:
+		sortOptions = []interface{}{map[string]interface{}{"propertyId": DashboardPropIDDeadline, "reversed": false}}
+		visibleProps = []interface{}{DashboardPropIDBoard, DashboardPropIDDeadline, DashboardPropIDStatus, DashboardPropIDDaysUntil}
+	}
 	return &model.Block{
 		ID:         utils.NewID(utils.IDTypeView),
 		BoardID:    boardID,
@@ -142,18 +173,18 @@ func defaultDashboardView(boardID string, kind string, userID string) *model.Blo
 		CreateAt:   now,
 		UpdateAt:   now,
 		Fields: map[string]interface{}{
-			"viewType":             "table",
-			"sortOptions":          []interface{}{map[string]interface{}{"propertyId": DashboardPropIDDeadline, "reversed": false}},
-			"visiblePropertyIds":   []interface{}{DashboardPropIDBoard, DashboardPropIDDeadline, DashboardPropIDStatus, DashboardPropIDDaysUntil},
-			"visibleOptionIds":     []interface{}{},
-			"hiddenOptionIds":      []interface{}{},
-			"collapsedOptionIds":   []interface{}{},
-			"filter":               map[string]interface{}{"operation": "and", "filters": []interface{}{}},
-			"cardOrder":            []interface{}{},
-			"columnWidths":         map[string]interface{}{},
-			"columnCalculations":   map[string]interface{}{},
-			"kanbanCalculations":   map[string]interface{}{},
-			"defaultTemplateId":    "",
+			"viewType":           "table",
+			"sortOptions":        sortOptions,
+			"visiblePropertyIds": visibleProps,
+			"visibleOptionIds":   []interface{}{},
+			"hiddenOptionIds":    []interface{}{},
+			"collapsedOptionIds": []interface{}{},
+			"filter":             map[string]interface{}{"operation": "and", "filters": []interface{}{}},
+			"cardOrder":          []interface{}{},
+			"columnWidths":       map[string]interface{}{},
+			"columnCalculations": map[string]interface{}{},
+			"kanbanCalculations": map[string]interface{}{},
+			"defaultTemplateId":  "",
 		},
 	}
 }
@@ -162,10 +193,16 @@ func defaultDashboardView(boardID string, kind string, userID string) *model.Blo
 // The blocks are NOT persisted — they are recomputed on every call.
 // Caller is responsible for verifying the board belongs to the calling user.
 func (a *App) GetDashboardCards(board *model.Board, userID string) ([]*model.Block, error) {
-	if board.DashboardKind() != model.DashboardKindDeadlines {
-		return nil, nil
+	switch board.DashboardKind() {
+	case model.DashboardKindDeadlines:
+		return a.getDeadlinesCards(board, userID)
+	case model.DashboardKindAllTasks:
+		return a.getAllTasksCards(board, userID)
 	}
+	return nil, nil
+}
 
+func (a *App) getDeadlinesCards(board *model.Board, userID string) ([]*model.Block, error) {
 	sourceBoards, err := a.store.GetBoardsForUserAndTeam(userID, board.TeamID, false)
 	if err != nil {
 		return nil, fmt.Errorf("cannot list source boards: %w", err)
@@ -247,12 +284,142 @@ func (a *App) GetDashboardCards(board *model.Board, userID string) ([]*model.Blo
 	return out, nil
 }
 
-// sourceBoardIndex caches which props on a source board carry the deadline,
-// the person-notify recipients, and the (first) select used as Status.
+// getAllTasksCards returns up to allTasksMaxCards virtual blocks aggregating
+// every non-template, non-deleted card on every board the user is allowed to
+// see. Cards are sorted by source UpdateAt DESC and trimmed to the cap.
+func (a *App) getAllTasksCards(board *model.Board, userID string) ([]*model.Block, error) {
+	sourceBoards, err := a.store.GetBoardsForUserAndTeam(userID, board.TeamID, false)
+	if err != nil {
+		return nil, fmt.Errorf("cannot list source boards: %w", err)
+	}
+
+	out := make([]*model.Block, 0)
+
+	for _, src := range sourceBoards {
+		if src.IsSystemBoard() {
+			continue
+		}
+		idx := indexSourceBoard(src.CardProperties)
+
+		blocks, err := a.store.GetBlocksForBoard(src.ID)
+		if err != nil {
+			a.logger.Warn(fmt.Sprintf("dashboard: cannot list blocks for board %s: %v", src.ID, err))
+			continue
+		}
+
+		for _, blk := range blocks {
+			if blk.Type != model.TypeCard || blk.DeleteAt > 0 {
+				continue
+			}
+			fields := blk.Fields
+			if fields == nil {
+				continue
+			}
+			if isTemplate, _ := fields["isTemplate"].(bool); isTemplate {
+				continue
+			}
+			cardProps, _ := fields["properties"].(map[string]interface{})
+
+			statusText := ""
+			if idx.statusPropID != "" && cardProps != nil {
+				if optID, ok := cardProps[idx.statusPropID].(string); ok && optID != "" {
+					statusText = selectOptionName(src.CardProperties, idx.statusPropID, optID)
+				}
+			}
+
+			assignees := collectAssignees(cardProps, idx.assigneePropIDs)
+
+			virtual := &model.Block{
+				ID:         dashboardSyntheticIDPrefix + blk.ID,
+				BoardID:    board.ID,
+				ParentID:   board.ID,
+				Type:       model.TypeCard,
+				Title:      blk.Title,
+				CreatedBy:  blk.CreatedBy,
+				ModifiedBy: blk.ModifiedBy,
+				CreateAt:   blk.CreateAt,
+				UpdateAt:   blk.UpdateAt,
+				Schema:     blk.Schema,
+				Fields: map[string]interface{}{
+					"icon": getStringField(fields, "icon"),
+					"properties": map[string]interface{}{
+						DashboardPropIDBoard:     src.Title,
+						DashboardPropIDStatus:    statusText,
+						DashboardPropIDAssignees: assignees,
+					},
+					"contentOrder":            []interface{}{},
+					dashboardSourceBoardField: src.ID,
+					dashboardSourceCardField:  blk.ID,
+				},
+			}
+			out = append(out, virtual)
+		}
+	}
+
+	// Newest first, then trim. Sorting after collection (rather than per-board)
+	// is the only way to apply a global cap that prefers the most recent cards.
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UpdateAt > out[j].UpdateAt
+	})
+	if len(out) > allTasksMaxCards {
+		out = out[:allTasksMaxCards]
+	}
+	return out, nil
+}
+
+// CollectDashboardAssigneeUserIDs returns the union of user IDs that appear
+// as assignees on any non-template, non-deleted card across every source
+// board feeding the given dashboard. Used to synthesize board members so the
+// frontend can resolve assignee names and offer them in filter dropdowns.
+// Caller is responsible for verifying the board belongs to the calling user.
+func (a *App) CollectDashboardAssigneeUserIDs(board *model.Board, userID string) ([]string, error) {
+	sourceBoards, err := a.store.GetBoardsForUserAndTeam(userID, board.TeamID, false)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	for _, src := range sourceBoards {
+		if src.IsSystemBoard() {
+			continue
+		}
+		idx := indexSourceBoard(src.CardProperties)
+		if len(idx.assigneePropIDs) == 0 {
+			continue
+		}
+		blocks, err := a.store.GetBlocksForBoard(src.ID)
+		if err != nil {
+			a.logger.Warn(fmt.Sprintf("dashboard: cannot list blocks for board %s: %v", src.ID, err))
+			continue
+		}
+		for _, blk := range blocks {
+			if blk.Type != model.TypeCard || blk.DeleteAt > 0 {
+				continue
+			}
+			if isTemplate, _ := blk.Fields["isTemplate"].(bool); isTemplate {
+				continue
+			}
+			cardProps, _ := blk.Fields["properties"].(map[string]interface{})
+			for _, id := range collectAssignees(cardProps, idx.assigneePropIDs) {
+				seen[id] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// sourceBoardIndex caches which props on a source board carry which roles for
+// dashboard synthesis: the deadline, person-notify recipients, the broader
+// "any person-typed" set used by All Tasks, and the (first) select used as Status.
 type sourceBoardIndex struct {
-	deadlinePropID string
-	notifyPropIDs  []string
-	statusPropID   string
+	deadlinePropID   string
+	notifyPropIDs    []string
+	assigneePropIDs  []string
+	statusPropID     string
 }
 
 func indexSourceBoard(cardProperties []map[string]interface{}) sourceBoardIndex {
@@ -270,6 +437,9 @@ func indexSourceBoard(cardProperties []map[string]interface{}) sourceBoardIndex 
 			}
 		case personNotifyPropType, multiPersonNotifyPropType:
 			idx.notifyPropIDs = append(idx.notifyPropIDs, propID)
+			idx.assigneePropIDs = append(idx.assigneePropIDs, propID)
+		case personPropType, multiPersonPropType:
+			idx.assigneePropIDs = append(idx.assigneePropIDs, propID)
 		case selectPropType:
 			if idx.statusPropID == "" {
 				idx.statusPropID = propID
@@ -277,6 +447,43 @@ func indexSourceBoard(cardProperties []map[string]interface{}) sourceBoardIndex 
 		}
 	}
 	return idx
+}
+
+// collectAssignees gathers the union of user IDs referenced by all
+// person-typed properties on a card, with stable ordering and no dupes.
+func collectAssignees(cardProps map[string]interface{}, propIDs []string) []string {
+	if cardProps == nil || len(propIDs) == 0 {
+		return []string{}
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	add := func(s string) {
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, propID := range propIDs {
+		switch v := cardProps[propID].(type) {
+		case string:
+			add(v)
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					add(s)
+				}
+			}
+		case []string:
+			for _, s := range v {
+				add(s)
+			}
+		}
+	}
+	return out
 }
 
 // isAssignedTo reports whether userID is referenced in any of the listed

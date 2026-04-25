@@ -116,7 +116,10 @@ type Board struct {
 const BoardPropertyDashboardKind = "dashboardKind"
 
 // Known DashboardKind values.
-const DashboardKindDeadlines = "deadlines"
+const (
+	DashboardKindDeadlines = "deadlines"
+	DashboardKindAllTasks  = "allTasks"
+)
 
 // DashboardKind returns the system-dashboard marker for this board, or "" for
 // a regular board.
