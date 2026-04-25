@@ -7,8 +7,9 @@ import {FormattedMessage} from 'react-intl'
 
 import {DatePropertyType} from '../properties/types'
 
-import {getCurrentBoard, isLoadingBoard, getTemplates} from '../store/boards'
-import {refreshCards, getCardLimitTimestamp, getCurrentBoardHiddenCardsCount, setLimitTimestamp, getCurrentViewCardsSortedFilteredAndGrouped, setCurrent as setCurrentCard} from '../store/cards'
+import {getCurrentBoard, isLoadingBoard, getTemplates, isSystemBoard} from '../store/boards'
+import {loadBoardData} from '../store/initialLoad'
+import {refreshCards, getCardLimitTimestamp, getCurrentBoardHiddenCardsCount, setLimitTimestamp, getCurrentViewCardsSortedFilteredAndGrouped, setCurrent as setCurrentCard, getCards} from '../store/cards'
 import {
     getCurrentBoardViews,
     getCurrentViewGroupBy,
@@ -64,7 +65,20 @@ function CenterContent(props: Props) {
         return hiddenBoardIDs.includes(board.id)
     }
 
+    const cardsById = useAppSelector(getCards)
     const showCard = useCallback((cardId?: string) => {
+        // For system dashboards (e.g. My Deadlines): cards are virtual proxies
+        // for cards that physically live on other boards. Clicking should
+        // navigate to the original board/card, not try to open a virtual card.
+        if (cardId && board) {
+            const card = cardsById[cardId]
+            const origBoardId = (card?.fields as unknown as {originalBoardId?: string})?.originalBoardId
+            const origCardId = (card?.fields as unknown as {originalCardId?: string})?.originalCardId
+            if (origBoardId && origCardId) {
+                history.push(`/boards/team/${board.teamId}/${origBoardId}/0/${origCardId}`)
+                return
+            }
+        }
         const params = {...match.params, cardId}
         let newPath = generatePath(Utils.getBoardPagePath(match.path), params)
         if (props.readonly) {
@@ -72,7 +86,16 @@ function CenterContent(props: Props) {
         }
         history.push(newPath)
         dispatch(setCurrentCard(cardId || ''))
-    }, [match, history])
+    }, [match, history, cardsById, board?.teamId])
+
+    // For system dashboards (e.g. My Deadlines) we don't get WebSocket
+    // updates from source boards — refresh the virtual block list every time
+    // the user opens or revisits this board.
+    useEffect(() => {
+        if (board && isSystemBoard(board)) {
+            dispatch(loadBoardData(board.id))
+        }
+    }, [board?.id])
 
     useEffect(() => {
         const onConfigChangeHandler = (_: WSClient, config: ClientConfig) => {

@@ -234,11 +234,33 @@ export const {reducer} = boardsSlice
 
 export const getBoards = (state: RootState): {[key: string]: Board} => state.boards?.boards || {}
 
+// True if the board is a per-user system dashboard (e.g. My Deadlines).
+// Synthetic dashboards live in `BOARDS` storage like normal boards but are
+// rendered under a separate sidebar section, so we filter them out of the
+// regular board listings.
+export const isSystemBoard = (board: Board): boolean => {
+    return Boolean(board.properties && (board.properties as any).dashboardKind)
+}
+
 export const getMySortedBoards = createSelector(
     getBoards,
     (state: RootState): {[key: string]: BoardMember} => state.boards?.myBoardMemberships || {},
     (boards, myBoardMemberships: {[key: string]: BoardMember}) => {
-        return Object.values(boards).filter((b) => myBoardMemberships[b.id]).
+        return Object.values(boards).
+            filter((b) => myBoardMemberships[b.id]).
+            filter((b) => !isSystemBoard(b)).
+            sort((a, b) => a.title.localeCompare(b.title))
+    },
+)
+
+// All system dashboards the user owns, separately from regular boards.
+export const getMyDashboardBoards = createSelector(
+    getBoards,
+    (state: RootState): {[key: string]: BoardMember} => state.boards?.myBoardMemberships || {},
+    (boards, myBoardMemberships: {[key: string]: BoardMember}) => {
+        return Object.values(boards).
+            filter((b) => myBoardMemberships[b.id]).
+            filter((b) => isSystemBoard(b)).
             sort((a, b) => a.title.localeCompare(b.title))
     },
 )

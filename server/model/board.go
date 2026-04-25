@@ -110,6 +110,31 @@ type Board struct {
 	DeleteAt int64 `json:"deleteAt"`
 }
 
+// Board.Properties key for the system dashboard marker (e.g. "deadlines").
+// Kept in Properties (a generic JSON map already on Board) to avoid a schema
+// migration. An empty value (or absent key) means a regular user board.
+const BoardPropertyDashboardKind = "dashboardKind"
+
+// Known DashboardKind values.
+const DashboardKindDeadlines = "deadlines"
+
+// DashboardKind returns the system-dashboard marker for this board, or "" for
+// a regular board.
+func (b *Board) DashboardKind() string {
+	if b.Properties == nil {
+		return ""
+	}
+	s, _ := b.Properties[BoardPropertyDashboardKind].(string)
+	return s
+}
+
+// IsSystemBoard reports whether this board is a per-user system dashboard
+// (e.g. My Deadlines). Cards on system boards are virtual and the board is
+// read-only except for views.
+func (b *Board) IsSystemBoard() bool {
+	return b.DashboardKind() != ""
+}
+
 // GetPropertyString returns the value of the specified property as a string,
 // or error if the property does not exist or is not of type string.
 func (b *Board) GetPropertyString(propName string) (string, error) {

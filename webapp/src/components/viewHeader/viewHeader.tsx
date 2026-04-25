@@ -68,6 +68,10 @@ const ViewHeader = (props: Props) => {
 
     const {board, activeView, views, groupByProperty, cards, dateDisplayProperty} = props
 
+    // System dashboards (e.g. My Deadlines) aggregate virtual cards from other
+    // boards — creating new cards here makes no sense.
+    const isDashboard = Boolean((board.properties as Record<string, unknown> | undefined)?.dashboardKind)
+
     const withGroupBy = activeView.fields.viewType === 'board' || activeView.fields.viewType === 'table'
     const withDisplayBy = activeView.fields.viewType === 'calendar'
     const withSortBy = activeView.fields.viewType !== 'calendar'
@@ -230,14 +234,16 @@ const ViewHeader = (props: Props) => {
 
                 {/* New card button */}
 
-                <BoardPermissionGate permissions={[Permission.ManageBoardCards]}>
-                    <NewCardButton
-                        addCard={props.addCard}
-                        addCardFromTemplate={props.addCardFromTemplate}
-                        addCardTemplate={props.addCardTemplate}
-                        editCardTemplate={props.editCardTemplate}
-                    />
-                </BoardPermissionGate>
+                {!isDashboard &&
+                    <BoardPermissionGate permissions={[Permission.ManageBoardCards]}>
+                        <NewCardButton
+                            addCard={props.addCard}
+                            addCardFromTemplate={props.addCardFromTemplate}
+                            addCardTemplate={props.addCardTemplate}
+                            editCardTemplate={props.editCardTemplate}
+                        />
+                    </BoardPermissionGate>
+                }
             </>}
         </div>
     )

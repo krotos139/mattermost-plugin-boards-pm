@@ -92,6 +92,12 @@ const CenterPanel = (props: Props) => {
 
     const clientConfig = useAppSelector<ClientConfig>(getClientConfig)
 
+    // System dashboards (e.g. My Deadlines) hold virtual cards aggregated from
+    // other boards — write actions don't make sense here, so treat them as
+    // read-only inside the workspace while keeping the outer Sidebar visible.
+    const isDashboard = Boolean((props.board.properties as Record<string, unknown> | undefined)?.dashboardKind)
+    const effectiveReadonly = props.readonly || isDashboard
+
     // empty dependency array yields behavior like `componentDidMount`, it only runs _once_
     // https://stackoverflow.com/a/58579462
     useEffect(() => {
@@ -99,17 +105,17 @@ const CenterPanel = (props: Props) => {
     }, [])
 
     useHotkeys('esc', (e: KeyboardEvent) => {
-        if (e.target !== document.body || props.readonly) {
+        if (e.target !== document.body || effectiveReadonly) {
             return
         }
         if (selectedCardIds.length > 0) {
             setSelectedCardIds([])
             e.stopPropagation()
         }
-    }, [selectedCardIds, props.readonly])
+    }, [selectedCardIds, effectiveReadonly])
 
     useHotkeys('ctrl+d', (e: KeyboardEvent) => {
-        if (e.target !== document.body || props.readonly) {
+        if (e.target !== document.body || effectiveReadonly) {
             return
         }
 
@@ -135,10 +141,10 @@ const CenterPanel = (props: Props) => {
             e.stopPropagation()
             e.preventDefault()
         }
-    }, [selectedCardIds, props.readonly, props.cards, props.board.id])
+    }, [selectedCardIds, effectiveReadonly, props.cards, props.board.id])
 
     useHotkeys('del,backspace', (e: KeyboardEvent) => {
-        if (e.target !== document.body || props.readonly) {
+        if (e.target !== document.body || effectiveReadonly) {
             return
         }
 
@@ -162,7 +168,7 @@ const CenterPanel = (props: Props) => {
             setSelectedCardIds([])
             e.stopPropagation()
         }
-    }, [selectedCardIds, props.readonly, props.cards])
+    }, [selectedCardIds, effectiveReadonly, props.cards])
 
     const showCard = useCallback((cardId?: string) => {
         if (selectedCardIds.length > 0) {
@@ -363,8 +369,9 @@ const CenterPanel = (props: Props) => {
         setShowHiddenCardCountNotification(show)
     }, [showHiddenCardCountNotification])
 
-    const showShareButton = !props.readonly && me?.id !== 'single-user'
-    const showShareLoginButton = props.readonly && me?.id !== 'single-user'
+    // Sharing/login UI is meaningless on system dashboards.
+    const showShareButton = !props.readonly && me?.id !== 'single-user' && !isDashboard
+    const showShareLoginButton = props.readonly && me?.id !== 'single-user' && !isDashboard
 
     const {groupByProperty, activeView, board, views, cards} = props
 
@@ -412,7 +419,7 @@ const CenterPanel = (props: Props) => {
                         cardId={props.shownCardId}
                         onClose={() => showCard(undefined)}
                         showCard={(cardId) => showCard(cardId)}
-                        readonly={props.readonly}
+                        readonly={effectiveReadonly}
                     />
                 </RootPortal>}
 

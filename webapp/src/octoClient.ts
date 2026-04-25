@@ -748,6 +748,21 @@ class OctoClient {
         return this.getBoardsWithPath(path)
     }
 
+    // Returns the per-user system dashboard board of the given kind
+    // (e.g. "deadlines"), creating it lazily on first access.
+    async getDashboardBoard(kind: string, teamId?: string): Promise<Board | undefined> {
+        const path = this.teamPath(teamId) + `/dashboards/${kind}`
+        const response = await fetch(this.getBaseURL() + path, {
+            method: 'GET',
+            headers: this.headers(),
+        })
+        if (response.status !== 200) {
+            return undefined
+        }
+        const board = (await this.getJson(response, {})) as Board
+        return board
+    }
+
     async getBoard(boardID: string): Promise<Board | undefined> {
         let path = `/api/v2/boards/${boardID}`
         const readToken = Utils.getReadToken()

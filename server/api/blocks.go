@@ -127,6 +127,41 @@ func (a *API) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 	var blocks []*model.Block
 	var block *model.Block
 	switch {
+	case board.IsSystemBoard():
+		// System (dashboard) boards: views/content blocks live in DB as usual,
+		// but card blocks are virtual — synthesised from the user's other boards.
+		realBlocks, rerr := a.app.GetBlocksForBoard(boardID)
+		if rerr != nil {
+			a.errorResponse(w, r, rerr)
+			return
+		}
+		for _, b := range realBlocks {
+			if b.Type == model.TypeCard {
+				// Persisted card blocks aren't expected on a system board, but skip
+				// just in case so they don't shadow virtual ones.
+				continue
+			}
+			if blockType != "" && string(b.Type) != blockType {
+				continue
+			}
+			if blockID != "" && b.ID != blockID {
+				continue
+			}
+			blocks = append(blocks, b)
+		}
+		if blockType == "" || blockType == string(model.TypeCard) {
+			virtuals, vErr := a.app.GetDashboardCards(board, userID)
+			if vErr != nil {
+				a.errorResponse(w, r, vErr)
+				return
+			}
+			for _, vc := range virtuals {
+				if blockID != "" && vc.ID != blockID {
+					continue
+				}
+				blocks = append(blocks, vc)
+			}
+		}
 	case all != "":
 		blocks, err = a.app.GetBlocksForBoard(boardID)
 		if err != nil {
@@ -235,6 +270,18 @@ func (a *API) handlePostBlocks(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.errorResponse(w, r, err)
 		return
+	}
+
+	// System (dashboard) boards are read-only except for views. We tolerate a
+	// missing board here — the existing path will surface a clearer error
+	// further down.
+	if postBoard, _ := a.app.GetBoard(boardID); postBoard != nil && postBoard.IsSystemBoard() {
+		for _, block := range blocks {
+			if block.Type != model.TypeView {
+				a.errorResponse(w, r, model.NewErrPermission("only view blocks can be modified on a system dashboard board"))
+				return
+			}
+		}
 	}
 
 	hasComments := false
@@ -386,6 +433,14 @@ func (a *API) handleDeleteBlock(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.errorResponse(w, r, err)
 		return
+	}
+
+	// System (dashboard) boards are read-only except for view blocks.
+	if block.Type != model.TypeView {
+		if dbBoard, dbErr := a.app.GetBoard(boardID); dbErr == nil && dbBoard != nil && dbBoard.IsSystemBoard() {
+			a.errorResponse(w, r, model.NewErrPermission("only view blocks can be modified on a system dashboard board"))
+			return
+		}
 	}
 
 	if block.Type == model.TypeComment {
@@ -560,6 +615,14 @@ func (a *API) handlePatchBlock(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.errorResponse(w, r, err)
 		return
+	}
+
+	// System (dashboard) boards are read-only except for view blocks.
+	if block.Type != model.TypeView {
+		if dbBoard, dbErr := a.app.GetBoard(boardID); dbErr == nil && dbBoard != nil && dbBoard.IsSystemBoard() {
+			a.errorResponse(w, r, model.NewErrPermission("only view blocks can be modified on a system dashboard board"))
+			return
+		}
 	}
 	if block.BoardID != boardID {
 		message := fmt.Sprintf("block ID=%s on BoardID=%s", block.ID, boardID)

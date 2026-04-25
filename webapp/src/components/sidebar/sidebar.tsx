@@ -47,6 +47,7 @@ import {useWebsockets} from '../../hooks/websockets'
 import {Board} from '../../blocks/board'
 
 import SidebarCategory from './sidebarCategory'
+import SidebarDashboardSection from './sidebarDashboardSection'
 import SidebarSettingsMenu from './sidebarSettingsMenu'
 import SidebarUserMenu from './sidebarUserMenu'
 
@@ -396,6 +397,8 @@ const Sidebar = (props: Props) => {
                 onBoardTemplateSelectorOpen={props.onBoardTemplateSelectorOpen}
                 userIsGuest={me?.is_guest}
             />
+
+            <SidebarDashboardSection activeBoardID={props.activeBoardId}/>
 
             <DragDropContext
                 onDragEnd={onDragEnd}
