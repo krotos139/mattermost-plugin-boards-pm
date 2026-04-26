@@ -113,6 +113,65 @@ The link expires after 60 seconds and works only once. Tap it again from the eph
 
 Touch DnD requires a 250ms long-press before drag starts, with a 20px scroll-tolerance threshold — so vertical scroll on phones no longer reorders cards. Sidebar auto-collapses after navigation on screens narrower than 768px, including for the new dashboard boards.
 
+### AI agent integration via MCP server
+
+Optional, off-by-default Model Context Protocol (MCP) server that lets the [Mattermost Agents (AI) plugin](https://github.com/mattermost/mattermost-plugin-agents) drive Boards on the user's behalf — list boards, search cards across all boards with rich filters, read full card detail, create / update cards, add comments. Every call runs under the requesting user's own permissions; the AI never sees boards or cards the user can't see.
+
+**Enable it.** System Console → Plugins → **Mattermost Boards (PM fork)**:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Enable MCP Server** | off | Master switch. Off = no MCP at all. |
+| **MCP Server Port** | `8975` | TCP port the loopback listener binds to. Pick any free port. |
+| **MCP Shared Secret** | empty | Optional. If set, every MCP request must carry `Authorization: Bearer <secret>`. Recommended on shared servers. |
+
+The listener only binds to `127.0.0.1` — never reachable from off the host. The plugin also exposes the same MCP endpoint through Mattermost's inter-plugin HTTP API at `plugin://focalboard/mcp` for callers that prefer to skip TCP.
+
+**Wire up Mattermost Agents.** System Console → Agents → MCP → **Add server**:
+
+- **Server URL:** `http://127.0.0.1:8975/mcp` (replace port if you changed it).
+- **Headers:** leave empty unless you set the shared secret. If you did, add a single row `Authorization` = `Bearer <your-secret>`.
+- **Per-user identity:** automatic. The Agents plugin auto-injects `X-Mattermost-UserID: <id>` on every call, and the MCP server uses that to scope all backend calls to the requesting user.
+
+After adding the server, **remove and re-add it whenever you upgrade this plugin** — Agents caches the tool list at registration time and won't see newly added tools until re-registration.
+
+**Tools exposed** (the AI agent picks these automatically based on user prompts):
+
+| Tool | What it does |
+| --- | --- |
+| `get_current_user` | Returns the calling user's id, username, name, email — so the agent never has to ask "what's your user id?". |
+| `list_my_boards` | Every non-template board across the user's teams, sorted by last update. |
+| `get_board_info` | Schema for one board: properties, status / priority option lists, due-date property name, assignee-property names. Call this before creating or updating cards. |
+| `search_cards` | Cross-board (or single-board) search with filters: text query, `assigned_to` (`me` / username / `any` / `unassigned`), `status`, `priority`, `due_date_range` (`overdue` / `today` / `this_week` / `next_week` / `YYYY-MM-DD..YYYY-MM-DD`), `has_subtasks`, `limit`. |
+| `get_card_details` | Full card: title, description, status / priority / due / assignees, all comments with authors, subtasks blocks. |
+| `create_card` | Title-and-shortcuts form (`assigned_to`, `status`, `priority`, `due_date`) plus a free-form properties dict. Accepts `"me"` for assigned_to. |
+| `update_card` | Partial change dict, reads existing properties and merges so untouched fields survive. |
+| `add_comment` | Posts a comment block on a card, attributed to the calling user. |
+
+**Example prompts that work without further configuration:**
+
+- "What tasks do I have on Project Tasks board, sorted by due date?"
+- "Close my current 'In Progress' task and start the next highest-priority one."
+- "Assign every unassigned card on Engineering to me, due in two days."
+- "Comment on card ABC123 saying I'll finish it tomorrow."
+
+**Verification (loopback only).** From the Mattermost host:
+
+```bash
+curl http://127.0.0.1:8975/health
+# {"status":"ok"} when the listener is up
+
+curl -s -X POST http://127.0.0.1:8975/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'X-Mattermost-UserID: <your-mm-user-id>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python -m json.tool
+# Should list 8 tools: get_current_user, list_my_boards, get_board_info,
+# search_cards, get_card_details, create_card, update_card, add_comment
+```
+
+If `/health` doesn't answer, the listener didn't start — check Mattermost server logs for `mcp:` lines (port collision, bind error, etc.).
+
 ### Card detail layout
 
 The Comments + History tabs panel now stretches to the full width of the card body instead of shrinking to the longest comment, matching the content-blocks editor below it.
@@ -133,10 +192,11 @@ The plugin ID is unchanged (`focalboard`), so installing this build replaces any
 2. In Mattermost: System Console → Plugin Management → Upload Plugin → pick the tar.gz.
 3. Enable the plugin. Existing boards become accessible immediately.
 
-### Optional: configure deadline reminders / mobile handoff
+### Optional: deadline reminders / mobile handoff / MCP server
 
 - The deadline reminder scheduler runs server-side automatically — no admin toggle needed beyond enabling the plugin.
 - The `/boards` slash command is registered automatically on plugin activation.
+- The MCP server for AI agents is **off by default**. Turn it on per the [AI agent integration via MCP server](#ai-agent-integration-via-mcp-server) section above if you want the Mattermost Agents plugin to drive Boards.
 
 ---
 
