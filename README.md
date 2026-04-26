@@ -45,6 +45,9 @@ Card detail now has **two tabs at the bottom**: Comments (the original) and **Hi
 
 A new content-block type for cards: a checklist that also tells you what state your subtasks are in (todo / in-progress / done counts). Useful for breaking a card down without spawning child cards.
 
+<!-- IMG: subtasks-block -->
+![Subtasks content block](docs/images/subtasks-block.png)
+
 ### Mobile experience
 
 #### `/boards` slash command — one-tap mobile login-free open
