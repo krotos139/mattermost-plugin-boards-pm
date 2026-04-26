@@ -102,6 +102,31 @@ function createDatePropertyFromGanttDates(start: Date, end: Date): DateProperty 
     return dateProperty
 }
 
+// True when the card's currently stored date value already encodes the same
+// from/to as `next`. Used to skip mutator calls that would otherwise emit
+// a no-op block update — every such update lands as a fresh entry in the
+// card history, which is what produced the long "5/3 → 5/4 → 5/4 → 5/4"
+// chains when commit fired more than once for a single drag.
+function isSameDateValue(rawCurrent: unknown, next: DateProperty): boolean {
+    if (typeof rawCurrent !== 'string' || rawCurrent === '') {
+        return false
+    }
+    try {
+        const cur = JSON.parse(rawCurrent)
+        if (!cur || typeof cur.from !== 'number') {
+            return false
+        }
+        if (cur.from !== next.from) {
+            return false
+        }
+        const curTo = typeof cur.to === 'number' ? cur.to : undefined
+        const nextTo = typeof next.to === 'number' ? next.to : undefined
+        return curTo === nextTo
+    } catch {
+        return false
+    }
+}
+
 const formatYMD = (d: Date): string => {
     const y = d.getFullYear()
     const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -692,41 +717,67 @@ const GanttView = (props: Props): JSX.Element|null => {
             }
         }
 
-        mutator.performAsUndoGroup(async () => {
-            const draggedNewProp = createDatePropertyFromGanttDates(start, end)
-            await mutator.changePropertyValue(
-                board.id,
-                dragged,
-                dateDisplayProperty.id,
-                JSON.stringify(draggedNewProp),
-            )
+        // Idempotent commit: if the dragged card's stored value already
+        // matches what we'd write, skip the mutator call entirely. This makes
+        // commit safe to invoke more than once per drag (e.g. when both
+        // mouseup AND pointerup fire on hybrid input devices) without
+        // producing extra history entries.
+        const draggedNewProp = createDatePropertyFromGanttDates(start, end)
+        const draggedNeedsUpdate = !isSameDateValue(draggedRaw, draggedNewProp)
 
-            for (const dep of cascade) {
-                const raw = dep.fields.properties[dateDisplayProperty.id]
-                const oldFrom = dateProp.getDateFrom(raw, dep)
-                if (!oldFrom) {
-                    continue
-                }
-                const oldTo = dateProp.getDateTo(raw, dep)
-                const newProp: DateProperty = {from: oldFrom.getTime() + deltaMs}
-                if (oldTo) {
-                    newProp.to = oldTo.getTime() + deltaMs
-                }
+        // Pre-compute cascade updates so we can skip the whole performAsUndoGroup
+        // when nothing actually changes — empty undo groups still create an
+        // entry in the undo stack and confuse subsequent Cmd-Z behaviour.
+        const cascadeUpdates: Array<{card: Card, value: DateProperty}> = []
+        for (const dep of cascade) {
+            const raw = dep.fields.properties[dateDisplayProperty.id]
+            const oldFrom = dateProp.getDateFrom(raw, dep)
+            if (!oldFrom) {
+                continue
+            }
+            const oldTo = dateProp.getDateTo(raw, dep)
+            const newProp: DateProperty = {from: oldFrom.getTime() + deltaMs}
+            if (oldTo) {
+                newProp.to = oldTo.getTime() + deltaMs
+            }
+            if (!isSameDateValue(raw, newProp)) {
+                cascadeUpdates.push({card: dep, value: newProp})
+            }
+        }
+
+        if (!draggedNeedsUpdate && cascadeUpdates.length === 0) {
+            return
+        }
+
+        mutator.performAsUndoGroup(async () => {
+            if (draggedNeedsUpdate) {
                 await mutator.changePropertyValue(
                     board.id,
-                    dep,
+                    dragged,
                     dateDisplayProperty.id,
-                    JSON.stringify(newProp),
+                    JSON.stringify(draggedNewProp),
+                )
+            }
+            for (const upd of cascadeUpdates) {
+                await mutator.changePropertyValue(
+                    board.id,
+                    upd.card,
+                    dateDisplayProperty.id,
+                    JSON.stringify(upd.value),
                 )
             }
         })
     }
 
-    // Document-level mouseup listener — flushes any pending drag-change
-    // exactly once when the user releases the mouse. Document level
-    // because the user may release the mouse outside the chart.
+    // Document-level release listener — flushes any pending drag-change
+    // exactly once when the user releases the input. Listens to mouse,
+    // pointer, and touch end events so the commit fires whether the user
+    // dragged with a mouse, touch, or stylus, and so a stuck drag can be
+    // recovered when a pointercancel arrives. The pendingDragRef is nulled
+    // immediately so later events in the same release sequence become
+    // no-ops, even if multiple end-of-drag events fire back to back.
     useEffect(() => {
-        const onMouseUp = () => {
+        const flush = () => {
             const pending = pendingDragRef.current
             if (!pending) {
                 return
@@ -734,8 +785,18 @@ const GanttView = (props: Props): JSX.Element|null => {
             pendingDragRef.current = null
             commitDragChangeRef.current(pending.taskId, pending.start, pending.end)
         }
-        document.addEventListener('mouseup', onMouseUp)
-        return () => document.removeEventListener('mouseup', onMouseUp)
+        document.addEventListener('mouseup', flush)
+        document.addEventListener('pointerup', flush)
+        document.addEventListener('pointercancel', flush)
+        document.addEventListener('touchend', flush)
+        document.addEventListener('touchcancel', flush)
+        return () => {
+            document.removeEventListener('mouseup', flush)
+            document.removeEventListener('pointerup', flush)
+            document.removeEventListener('pointercancel', flush)
+            document.removeEventListener('touchend', flush)
+            document.removeEventListener('touchcancel', flush)
+        }
     }, [])
 
     if (!dateDisplayProperty) {

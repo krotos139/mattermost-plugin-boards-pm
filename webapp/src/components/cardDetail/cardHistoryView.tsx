@@ -12,9 +12,49 @@ import {IUser} from '../../user'
 import {Board, IPropertyTemplate} from '../../blocks/board'
 import Tooltip from '../../widgets/tooltip'
 
-import {CardHistoryEvent} from './cardHistory'
+import {CardHistoryEvent, HistoryEventKind} from './cardHistory'
 
 import './cardHistoryView.scss'
+
+// Kinds that we collapse runs of into a single net-change entry.
+const COALESCE_KINDS = new Set<HistoryEventKind>(['property', 'title', 'icon'])
+
+// Maximum gap between two consecutive events of the same kind/user/target
+// for them to be merged. Wide enough to swallow a Timeline drag plus a few
+// follow-up tweaks, narrow enough that next-day edits stay separate entries.
+const COALESCE_WINDOW_MS = 30 * 60 * 1000
+
+// Merge runs of consecutive same-{kind, user, target} events into a single
+// entry. Keeps the first event's `before` and the last event's `after`,
+// effectively showing the user's net change rather than every micro-step.
+// A drag across many days in Timeline view, which lands one history event
+// per snap, collapses to one "5/3 → 5/8" entry. Net no-op runs (where the
+// final `after` matches the original `before`) are dropped entirely so a
+// drag forward and back to the same position leaves no trace.
+const coalesceEvents = (events: CardHistoryEvent[]): CardHistoryEvent[] => {
+    const out: CardHistoryEvent[] = []
+    for (const ev of events) {
+        const last = out[out.length - 1]
+        const sameTarget = last !== undefined &&
+            last.kind === ev.kind &&
+            last.userId === ev.userId &&
+            (last.propertyId ?? '') === (ev.propertyId ?? '') &&
+            (last.blockId ?? '') === (ev.blockId ?? '')
+        if (
+            last !== undefined &&
+            sameTarget &&
+            COALESCE_KINDS.has(ev.kind) &&
+            ev.timestamp - last.timestamp <= COALESCE_WINDOW_MS
+        ) {
+            last.after = ev.after
+            last.timestamp = ev.timestamp
+        } else {
+            // Copy so the merge above doesn't mutate the original event.
+            out.push({...ev})
+        }
+    }
+    return out.filter((ev) => !COALESCE_KINDS.has(ev.kind) || ev.before !== ev.after)
+}
 
 type Props = {
     board: Board
@@ -322,8 +362,9 @@ const CardHistoryView = (props: Props): JSX.Element => {
     }
 
     // Newest first, oldest at the bottom — opposite of the chronological
-    // order the backend returns.
-    const ordered = events.slice().reverse()
+    // order the backend returns. Coalesce on the chronological list before
+    // reversing so the merge windows are walked in time order.
+    const ordered = coalesceEvents(events).reverse()
 
     return (
         <div className='CardHistoryView'>
