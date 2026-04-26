@@ -313,6 +313,11 @@ func (s *SQLStore) GetBlockHistoryNewestChildren(parentID string, opts model.Que
 
 }
 
+func (s *SQLStore) GetCardSubtreeHistory(cardID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error) {
+	return s.getCardSubtreeHistory(s.db, cardID, opts)
+
+}
+
 func (s *SQLStore) GetBlocks(opts model.QueryBlocksOptions) ([]*model.Block, error) {
 	return s.getBlocks(s.db, opts)
 

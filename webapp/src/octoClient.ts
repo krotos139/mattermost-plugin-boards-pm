@@ -21,6 +21,7 @@ import {Constants} from './constants'
 import {BoardsCloudLimits} from './boardsCloudLimits'
 import {TopBoardResponse} from './insights'
 import {BoardSiteStatistics} from './statistics'
+import {CardHistoryEvent} from './components/cardDetail/cardHistory'
 
 //
 // OctoClient is the client interface to the server APIs
@@ -761,6 +762,19 @@ class OctoClient {
         }
         const board = (await this.getJson(response, {})) as Board
         return board
+    }
+
+    async getCardHistory(cardID: string): Promise<CardHistoryEvent[]> {
+        const path = `/api/v2/cards/${cardID}/history`
+        const response = await fetch(this.getBaseURL() + path, {
+            method: 'GET',
+            headers: this.headers(),
+        })
+        if (response.status !== 200) {
+            return []
+        }
+        const events = (await this.getJson(response, [])) as CardHistoryEvent[]
+        return events || []
     }
 
     async getBoard(boardID: string): Promise<Board | undefined> {

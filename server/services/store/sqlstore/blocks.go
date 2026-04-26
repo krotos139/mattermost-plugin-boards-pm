@@ -696,6 +696,46 @@ func (s *SQLStore) getBlockHistoryDescendants(db sq.BaseRunner, boardID string, 
 	return s.blocksFromRows(rows)
 }
 
+// getCardSubtreeHistory returns every version of the card itself plus every
+// version of every block whose parent_id is the card (content blocks,
+// comments, attachments). Used to build the per-card activity log.
+func (s *SQLStore) getCardSubtreeHistory(db sq.BaseRunner, cardID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error) {
+	var order string
+	if opts.Descending {
+		order = descClause
+	}
+
+	query := s.getQueryBuilder(db).
+		Select(s.blockFields("")...).
+		From(s.tablePrefix + "blocks_history").
+		Where(sq.Or{
+			sq.Eq{"id": cardID},
+			sq.Eq{"parent_id": cardID},
+		}).
+		OrderBy("insert_at " + order + ", update_at" + order)
+
+	if opts.BeforeUpdateAt != 0 {
+		query = query.Where(sq.Lt{"update_at": opts.BeforeUpdateAt})
+	}
+
+	if opts.AfterUpdateAt != 0 {
+		query = query.Where(sq.Gt{"update_at": opts.AfterUpdateAt})
+	}
+
+	if opts.Limit != 0 {
+		query = query.Limit(opts.Limit)
+	}
+
+	rows, err := query.Query()
+	if err != nil {
+		s.logger.Error(`GetCardSubtreeHistory ERROR`, mlog.Err(err))
+		return nil, err
+	}
+	defer s.CloseRows(rows)
+
+	return s.blocksFromRows(rows)
+}
+
 // getBlockHistoryNewestChildren returns the newest (latest) version child blocks for the
 // specified parent from the blocks_history table. This includes any deleted children.
 func (s *SQLStore) getBlockHistoryNewestChildren(db sq.BaseRunner, parentID string, opts model.QueryBlockHistoryChildOptions) ([]*model.Block, bool, error) {

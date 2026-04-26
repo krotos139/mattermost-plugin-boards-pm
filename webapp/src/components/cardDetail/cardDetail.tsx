@@ -35,7 +35,7 @@ import {getClientConfig} from '../../store/clientConfig'
 
 import CardSkeleton from '../../svg/card-skeleton'
 
-import CommentsList from './commentsList'
+import CardActivityTabs from './cardActivityTabs'
 import {CardDetailProvider} from './cardDetailContext'
 import CardDetailContents from './cardDetailContents'
 import CardDetailContentsMenu from './cardDetailContentsMenu'
@@ -300,11 +300,12 @@ const CardDetail = (props: Props): JSX.Element|null => {
                     />
                 </Fragment>}
 
-                {/* Comments */}
+                {/* Comments + History tabs */}
 
                 {!limited && <Fragment>
                     <hr/>
-                    <CommentsList
+                    <CardActivityTabs
+                        board={props.board}
                         comments={comments}
                         boardId={card.boardId}
                         cardId={card.id}

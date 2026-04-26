@@ -28,6 +28,7 @@ func (a *API) registerCardsRoutes(r *mux.Router) {
 	r.HandleFunc("/boards/{boardID}/cards", a.sessionRequired(a.handleGetCards)).Methods("GET")
 	r.HandleFunc("/cards/{cardID}", a.sessionRequired(a.handlePatchCard)).Methods("PATCH")
 	r.HandleFunc("/cards/{cardID}", a.sessionRequired(a.handleGetCard)).Methods("GET")
+	r.HandleFunc("/cards/{cardID}/history", a.sessionRequired(a.handleGetCardHistory)).Methods("GET")
 }
 
 func (a *API) handleCreateCard(w http.ResponseWriter, r *http.Request) {
@@ -388,5 +389,69 @@ func (a *API) handleGetCard(w http.ResponseWriter, r *http.Request) {
 	// response
 	jsonBytesResponse(w, http.StatusOK, data)
 
+	auditRec.Success()
+}
+
+func (a *API) handleGetCardHistory(w http.ResponseWriter, r *http.Request) {
+	// swagger:operation GET /cards/{cardID}/history getCardHistory
+	//
+	// Returns the chronological activity log for a card. Events are derived
+	// on the fly from blocks_history and capped at the most recent 100.
+	//
+	// ---
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: cardID
+	//   in: path
+	//   description: Card ID
+	//   required: true
+	//   type: string
+	// security:
+	// - BearerAuth: []
+	// responses:
+	//   '200':
+	//     description: success
+	//     schema:
+	//       type: array
+	//       items:
+	//         "$ref": "#/definitions/CardHistoryEvent"
+	//   default:
+	//     description: internal error
+	//     schema:
+	//       "$ref": "#/definitions/ErrorResponse"
+
+	userID := getUserID(r)
+	cardID := mux.Vars(r)["cardID"]
+
+	card, err := a.app.GetCardByID(cardID)
+	if err != nil || card == nil {
+		a.errorResponse(w, r, model.NewErrBadRequest(fmt.Sprintf("could not fetch card %s", cardID)))
+		return
+	}
+
+	if !a.permissions.HasPermissionToBoard(userID, card.BoardID, model.PermissionViewBoard) {
+		a.errorResponse(w, r, model.NewErrPermission("access denied to card history"))
+		return
+	}
+
+	auditRec := a.makeAuditRecord(r, "getCardHistory", audit.Fail)
+	defer a.audit.LogRecord(audit.LevelRead, auditRec)
+	auditRec.AddMeta("boardID", card.BoardID)
+	auditRec.AddMeta("cardID", card.ID)
+
+	events, err := a.app.GetCardHistory(card.BoardID, card.ID)
+	if err != nil {
+		a.errorResponse(w, r, err)
+		return
+	}
+
+	data, err := json.Marshal(events)
+	if err != nil {
+		a.errorResponse(w, r, err)
+		return
+	}
+
+	jsonBytesResponse(w, http.StatusOK, data)
 	auditRec.Success()
 }

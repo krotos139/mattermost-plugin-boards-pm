@@ -416,6 +416,21 @@ func (mr *MockStoreMockRecorder) GetBlockHistoryNewestChildren(parentID, opts in
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetBlockHistoryNewestChildren", reflect.TypeOf((*MockStore)(nil).GetBlockHistoryNewestChildren), parentID, opts)
 }
 
+// GetCardSubtreeHistory mocks base method.
+func (m *MockStore) GetCardSubtreeHistory(cardID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCardSubtreeHistory", cardID, opts)
+	ret0, _ := ret[0].([]*model.Block)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCardSubtreeHistory indicates an expected call of GetCardSubtreeHistory.
+func (mr *MockStoreMockRecorder) GetCardSubtreeHistory(cardID, opts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCardSubtreeHistory", reflect.TypeOf((*MockStore)(nil).GetCardSubtreeHistory), cardID, opts)
+}
+
 // GetBlocks mocks base method.
 func (m *MockStore) GetBlocks(opts model.QueryBlocksOptions) ([]*model.Block, error) {
 	m.ctrl.T.Helper()

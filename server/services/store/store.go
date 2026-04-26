@@ -42,6 +42,7 @@ type Store interface {
 	GetBlockHistory(blockID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error)
 	GetBlockHistoryDescendants(boardID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error)
 	GetBlockHistoryNewestChildren(parentID string, opts model.QueryBlockHistoryChildOptions) ([]*model.Block, bool, error)
+	GetCardSubtreeHistory(cardID string, opts model.QueryBlockHistoryOptions) ([]*model.Block, error)
 	GetBoardHistory(boardID string, opts model.QueryBoardHistoryOptions) ([]*model.Board, error)
 	GetBoardAndCardByID(blockID string) (board *model.Board, card *model.Block, err error)
 	GetBoardAndCard(block *model.Block) (board *model.Board, card *model.Block, err error)
