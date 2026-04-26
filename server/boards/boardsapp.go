@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/mattermost/mattermost-plugin-boards/server/app"
 	"github.com/mattermost/mattermost-plugin-boards/server/auth"
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/server"
@@ -179,6 +180,13 @@ func NewBoardsApp(api model.ServicesAPI, manifest *mm_model.Manifest) (*BoardsAp
 		logger:          logger,
 		deadlineService: deadlineService,
 	}, nil
+}
+
+// App exposes the underlying boards app to peers in the same process (e.g. the
+// loopback MCP server) that need to read/mutate boards directly without going
+// through HTTP.
+func (b *BoardsApp) App() *app.App {
+	return b.server.App()
 }
 
 func (b *BoardsApp) Start() error {

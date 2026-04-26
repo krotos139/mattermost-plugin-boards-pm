@@ -4,20 +4,30 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/boards"
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/services/handoff"
+	"github.com/mattermost/mattermost-plugin-boards/server/services/mcp"
 
 	pluginapi "github.com/mattermost/mattermost/server/public/pluginapi"
 
 	mm_model "github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
+)
+
+const (
+	mcpEnabledSetting      = "enablemcpserver"
+	mcpPortSetting         = "mcpserverport"
+	mcpSharedSecretSetting = "mcpsharedsecret"
+	mcpDefaultPort         = 8975
 )
 
 var ErrPluginNotAllowed = errors.New("boards plugin not allowed while Boards product enabled")
@@ -27,6 +37,8 @@ type Plugin struct {
 	plugin.MattermostPlugin
 	boardsApp *boards.BoardsApp
 	handoff   *handoff.Service
+	mcpServer *mcp.Server
+	mcpLogger mlog.LoggerIFace
 }
 
 func (p *Plugin) OnActivate() error {
@@ -54,10 +66,66 @@ func (p *Plugin) OnActivate() error {
 
 	p.boardsApp = boardsApp
 	p.handoff = handoff.New(p.MattermostPlugin.API, logger)
+	p.mcpLogger = logger
 	if err := p.MattermostPlugin.API.RegisterCommand(boardsCommand()); err != nil {
 		logger.Warn("could not register /boards slash command", mlog.Err(err))
 	}
-	return p.boardsApp.Start()
+	if err := p.boardsApp.Start(); err != nil {
+		return err
+	}
+
+	p.maybeStartMCP()
+	return nil
+}
+
+// maybeStartMCP constructs the MCP server when the admin has enabled it in
+// plugin settings, and optionally starts the loopback HTTP listener. The
+// server object is always retained for the plugin-transport entry point
+// (Plugin.ServeHTTP routes /mcp to it via Mattermost's inter-plugin HTTP
+// API), so callers like the Mattermost Agents (AI) plugin can talk to MCP
+// through plugin://focalboard/mcp without opening a TCP port.
+//
+// A loopback listener is started when mcpserverport > 0; setting the port
+// to 0 disables it but keeps the in-process plugin route active. Failures
+// are logged and swallowed — MCP is optional and should not block the rest
+// of the plugin from coming up.
+func (p *Plugin) maybeStartMCP() {
+	mmcfg := p.MattermostPlugin.API.GetConfig()
+	settings := mmcfg.PluginSettings.Plugins[boards.PluginName]
+	enabled, _ := settings[mcpEnabledSetting].(bool)
+	if !enabled {
+		return
+	}
+	port := mcpDefaultPort
+	switch v := settings[mcpPortSetting].(type) {
+	case float64:
+		port = int(v)
+	case int:
+		port = v
+	}
+	sharedSecret, _ := settings[mcpSharedSecretSetting].(string)
+	server := mcp.New(
+		mcp.Config{
+			Port:          port,
+			ServerName:    "mattermost-boards",
+			ServerVersion: manifest.Version,
+			SharedSecret:  sharedSecret,
+		},
+		p.boardsApp.App(),
+		p.MattermostPlugin.API,
+		p.mcpLogger,
+	)
+	// Retain the server reference unconditionally so Plugin.ServeHTTP can
+	// dispatch /mcp requests delivered via the inter-plugin HTTP API.
+	p.mcpServer = server
+
+	if port > 0 {
+		if err := server.Start(); err != nil {
+			p.mcpLogger.Warn("mcp: loopback listener failed to start; plugin transport remains available", mlog.Err(err))
+		}
+	} else {
+		p.mcpLogger.Info("mcp: loopback listener disabled (port=0); accessible only via plugin transport plugin://focalboard/mcp")
+	}
 }
 
 const boardsCommandTrigger = "boards"
@@ -146,6 +214,14 @@ func (p *Plugin) WebSocketMessageHasBeenPosted(webConnID, userID string, req *mm
 }
 
 func (p *Plugin) OnDeactivate() error {
+	if p.mcpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := p.mcpServer.Stop(ctx); err != nil {
+			p.mcpLogger.Warn("mcp: stop returned error", mlog.Err(err))
+		}
+		cancel()
+		p.mcpServer = nil
+	}
 	return p.boardsApp.Stop()
 }
 
@@ -169,12 +245,25 @@ func (p *Plugin) GenerateSupportData(ctx *plugin.Context) ([]*mm_model.FileData,
 	return p.boardsApp.GenerateSupportData(ctx)
 }
 
-// ServeHTTP routes requests delivered by Mattermost. The /handoff/* surface is
-// owned by the mobile-handoff bridge and bypasses the boards app router; all
-// other paths fall through to the embedded Boards server.
+// mcpPluginRoutePath is the request path served via Mattermost's inter-plugin
+// HTTP API. Admins configure mattermost-plugin-agents with
+//
+//	BaseURL: plugin://focalboard/mcp
+//
+// which is delivered to this plugin's ServeHTTP with r.URL.Path = "/mcp".
+const mcpPluginRoutePath = "/mcp"
+
+// ServeHTTP routes requests delivered by Mattermost. /handoff/* is owned by
+// the mobile-handoff bridge, /mcp by the MCP server (when enabled); both
+// bypass the BoardsApp router so they don't compete with board-related
+// routes the app may add later. Everything else falls through to BoardsApp.
 func (p *Plugin) ServeHTTP(ctx *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	if p.handoff != nil && strings.HasPrefix(r.URL.Path, "/handoff/") {
 		p.handoff.ServeHTTP(w, r)
+		return
+	}
+	if p.mcpServer != nil && r.URL.Path == mcpPluginRoutePath {
+		p.mcpServer.ServeHTTP(w, r)
 		return
 	}
 	p.boardsApp.ServeHTTP(ctx, w, r)

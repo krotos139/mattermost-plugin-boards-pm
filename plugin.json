@@ -4,9 +4,9 @@
     "description": "Mattermost Boards plugin with project-management extensions: Timeline view, deadlines + DM reminders, dashboard boards, mobile login handoff.",
     "homepage_url": "https://github.com/krotos139/mattermost-plugin-boards-pm",
     "support_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/issues",
-    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.0.0",
+    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.1.0",
     "icon_path": "assets/starter-template-icon.svg",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "min_server_version": "10.7.0",
     "server": {
         "executables": {
@@ -29,6 +29,24 @@
             "display_name": "Enable Publicly-Shared Boards:",
             "default": false,
             "help_text": "This allows board editors to share boards that can be accessed by anyone with the link."
+        }, {
+            "key": "EnableMCPServer",
+            "type": "bool",
+            "display_name": "Enable MCP Server:",
+            "default": false,
+            "help_text": "Runs a loopback-only Model Context Protocol (MCP) server so the Mattermost Agents (AI) plugin can drive Boards on the user's behalf. Exposes seven tools: list_my_boards, get_board_info, search_cards, get_card_details, create_card, update_card, add_comment. Each call runs with the calling user's own Boards permissions — boards / cards the user can't see are filtered out. Listens on 127.0.0.1 only — never exposed off-host. To wire up: System Console → Agents → MCP → Add server, set Server URL to http://127.0.0.1:<MCPServerPort>/mcp (default http://127.0.0.1:8975/mcp). The Agents plugin auto-injects the X-Mattermost-UserID header, so each user's tool calls run as that user — you do NOT need to put a per-user token in the Headers field. Set MCP Shared Secret below if you want the endpoint gated."
+        }, {
+            "key": "MCPServerPort",
+            "type": "number",
+            "display_name": "MCP Server Port:",
+            "default": 8975,
+            "help_text": "TCP port for the loopback MCP listener. Only consulted when 'Enable MCP Server' is on. Pick any free port; the Server URL in the Agents plugin must match (http://127.0.0.1:<this-port>/mcp)."
+        }, {
+            "key": "MCPSharedSecret",
+            "type": "text",
+            "display_name": "MCP Shared Secret:",
+            "default": "",
+            "help_text": "Optional. If set, the MCP server requires every request to carry 'Authorization: Bearer <this-value>'. Set the SAME value in the Mattermost Agents plugin under your MCP server's Headers field as a single row — Key: Authorization, Value: Bearer <paste-secret-here>. Per-user identity is handled separately via the X-Mattermost-UserID header that Agents auto-injects, so this secret is one shared value (not a Mattermost session token, not per-user). Generate any random string (e.g. `openssl rand -hex 32`). Leave empty to accept all loopback callers without auth — fine for single-user dev boxes, NOT recommended on shared servers since any local process could spoof X-Mattermost-UserID."
         }]
     }
 }
