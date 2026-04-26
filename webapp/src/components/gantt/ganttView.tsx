@@ -9,7 +9,7 @@
 // parent is dragged. "Progress by" picks a number property (0-100) used
 // for the in-bar progress fill.
 
-import React, {useEffect, useMemo, useRef} from 'react'
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useIntl} from 'react-intl'
 
 // Pull frappe-gantt from a vendored ESM bundle inside the project rather
@@ -42,12 +42,13 @@ function resolveGanttCtor(): GanttCtorType | null {
 import {DatePropertyType} from '../../properties/types'
 import mutator from '../../mutator'
 import {Board, IPropertyTemplate} from '../../blocks/board'
-import {BoardView} from '../../blocks/boardView'
+import {BoardView, createBoardView} from '../../blocks/boardView'
 import {Card} from '../../blocks/card'
 import {DateProperty} from '../../properties/date/date'
 import propsRegistry from '../../properties'
 import {Constants} from '../../constants'
-import {useAppSelector} from '../../store/hooks'
+import {useAppDispatch, useAppSelector} from '../../store/hooks'
+import {updateView} from '../../store/views'
 import {getBoardUsers} from '../../store/users'
 import {IUser} from '../../user'
 import PropertyValueElement from '../propertyValueElement'
@@ -63,6 +64,12 @@ const FRAPPE_UPPER_HEADER = 45
 const FRAPPE_LOWER_HEADER = 30
 const FRAPPE_HEADER_HEIGHT = FRAPPE_UPPER_HEADER + FRAPPE_LOWER_HEADER + 10
 const ROW_HEIGHT = FRAPPE_BAR_HEIGHT + FRAPPE_PADDING
+
+// Width defaults for the resizable side-panel columns. Width per property is
+// stored in `activeView.fields.columnWidths`, the same place the Table view
+// stores it, so unsetting / hiding a property keeps the user's prior choice.
+const DEFAULT_SIDE_COLUMN_WIDTH = 150
+const MIN_SIDE_COLUMN_WIDTH = 60
 
 type Props = {
     board: Board
@@ -234,6 +241,7 @@ function readProgress(card: Card, prop?: IPropertyTemplate): number {
 const GanttView = (props: Props): JSX.Element|null => {
     const {board, cards, activeView, dateDisplayProperty, readonly, showCard} = props
     const intl = useIntl()
+    const dispatch = useAppDispatch()
     const containerRef = useRef<HTMLDivElement | null>(null)
     const ganttRef = useRef<InstanceType<typeof GanttImport> | null>(null)
     // Inner element of the side panel that we shift programmatically to
@@ -293,6 +301,75 @@ const GanttView = (props: Props): JSX.Element|null => {
     cardsRef.current = cards
     boardUsersRef.current = boardUsers
     showCardRef.current = showCard
+
+    // Live overrides for column widths during an active resize drag. Cleared
+    // when the drag commits or is cancelled. Storing the value here means the
+    // dispatched view update doesn't have to land before the next paint —
+    // the cell renders the in-flight width directly.
+    const [liveColumnWidths, setLiveColumnWidths] = useState<Record<string, number>>({})
+
+    const getStoredColumnWidth = useCallback((id: string): number => {
+        const stored = activeView.fields.columnWidths?.[id]
+        return stored && stored > 0 ? stored : DEFAULT_SIDE_COLUMN_WIDTH
+    }, [activeView.fields.columnWidths])
+
+    const getEffectiveColumnWidth = useCallback((id: string): number => {
+        const live = liveColumnWidths[id]
+        return live !== undefined ? live : getStoredColumnWidth(id)
+    }, [liveColumnWidths, getStoredColumnWidth])
+
+    const startColumnResize = useCallback((event: React.PointerEvent<HTMLDivElement>, columnId: string) => {
+        // Only react to primary pointer (left mouse / single-finger touch).
+        if (event.button !== undefined && event.button !== 0) {
+            return
+        }
+        event.preventDefault()
+        event.stopPropagation()
+
+        const startX = event.clientX
+        const startWidth = getEffectiveColumnWidth(columnId)
+
+        const computeWidth = (clientX: number): number =>
+            Math.max(MIN_SIDE_COLUMN_WIDTH, startWidth + (clientX - startX))
+
+        const onPointerMove = (ev: PointerEvent) => {
+            setLiveColumnWidths((prev) => ({...prev, [columnId]: computeWidth(ev.clientX)}))
+        }
+        const onPointerUp = (ev: PointerEvent) => {
+            document.removeEventListener('pointermove', onPointerMove)
+            document.removeEventListener('pointerup', onPointerUp)
+            document.removeEventListener('pointercancel', onPointerUp)
+            document.body.style.userSelect = ''
+
+            const finalWidth = computeWidth(ev.clientX)
+            const previousStored = activeView.fields.columnWidths?.[columnId] ?? 0
+            // Drop the live override before dispatching so the cell falls back
+            // to the stored value once the view update lands.
+            setLiveColumnWidths((prev) => {
+                if (!(columnId in prev)) {
+                    return prev
+                }
+                const next = {...prev}
+                delete next[columnId]
+                return next
+            })
+            if (finalWidth === previousStored) {
+                return
+            }
+            const nextWidths = {...(activeView.fields.columnWidths || {}), [columnId]: finalWidth}
+            const newView = createBoardView(activeView)
+            newView.fields.columnWidths = nextWidths
+            dispatch(updateView(newView))
+            mutator.updateBlock(board.id, newView, activeView, 'resize column').catch(() => {
+                dispatch(updateView(activeView))
+            })
+        }
+        document.addEventListener('pointermove', onPointerMove)
+        document.addEventListener('pointerup', onPointerUp)
+        document.addEventListener('pointercancel', onPointerUp)
+        // Suppress accidental text selection while dragging.
+        document.body.style.userSelect = 'none'
+    }, [activeView, board.id, dispatch, getEffectiveColumnWidth])
 
     // Visible properties from the view config, minus the title (the bar
     // already shows the title) and the synthetic badges column (no card
@@ -699,9 +776,16 @@ const GanttView = (props: Props): JSX.Element|null => {
                                 <div
                                     key={p.id}
                                     className='GanttContainer__props-cell GanttContainer__props-cell--header'
+                                    style={{width: getEffectiveColumnWidth(p.id)}}
                                     title={p.name}
                                 >
-                                    {p.name}
+                                    <span className='GanttContainer__props-cell-text'>{p.name}</span>
+                                    <div
+                                        className='GanttContainer__props-grip'
+                                        onPointerDown={(e) => startColumnResize(e, p.id)}
+                                        role='separator'
+                                        aria-label={intl.formatMessage({id: 'GanttView.resize-column', defaultMessage: 'Resize column'})}
+                                    />
                                 </div>
                             ))}
                         </div>
@@ -725,6 +809,7 @@ const GanttView = (props: Props): JSX.Element|null => {
                                                 <div
                                                     key={p.id}
                                                     className='GanttContainer__props-cell'
+                                                    style={{width: getEffectiveColumnWidth(p.id)}}
                                                 >
                                                     <PropertyValueElement
                                                         board={board}

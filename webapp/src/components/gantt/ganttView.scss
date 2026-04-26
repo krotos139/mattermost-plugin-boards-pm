@@ -44,15 +44,16 @@
         }
     }
 
-    // Sidebar showing the visible-properties columns. Width is bounded so
-    // a board with many wide properties (multiPerson, etc.) doesn't push
-    // the chart out of view.
+    // Sidebar showing the visible-properties columns. Width is the sum of
+    // the per-column widths set by the user (each cell carries an inline
+    // width style). Capped at 80% so the chart never disappears entirely;
+    // the chart's own min-width still applies underneath.
     &__props {
         flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        min-width: 200px;
-        max-width: 50%;
+        min-width: 0;
+        max-width: 80%;
         border-right: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
         background: var(--g-header-background, rgb(var(--center-channel-bg-rgb)));
     }
@@ -90,7 +91,11 @@
     }
 
     &__props-cell {
-        flex: 1 1 0;
+        // Cells declare their width inline (style.width) so the user-
+        // configurable per-column resize survives re-renders. flex grow /
+        // shrink are zeroed so cells never deviate from that width.
+        flex: 0 0 auto;
+        position: relative;
         min-width: 0;
         padding: 4px 8px;
         font-size: 12px;
@@ -98,6 +103,7 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        box-sizing: border-box;
 
         // Tame React property editors that try to take 100% width and add
         // their own padding — keep cell content compact so rows match the
@@ -107,8 +113,51 @@
         }
 
         &--header {
-            padding: 8px;
+            padding: 8px 16px 8px 8px;
             text-transform: none;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 4px;
+        }
+    }
+
+    &__props-cell-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    // Drag handle on the right edge of each header cell. The wide hit area
+    // (10px) makes touch resizing feasible; the visible 2px line only paints
+    // on hover/active to keep the header chrome quiet at rest.
+    &__props-grip {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: 10px;
+        cursor: col-resize;
+        touch-action: none;
+        z-index: 1;
+        user-select: none;
+
+        &::after {
+            content: '';
+            position: absolute;
+            top: 25%;
+            bottom: 25%;
+            right: 4px;
+            width: 2px;
+            background: rgba(var(--center-channel-color-rgb), 0);
+            transition: background 120ms ease;
+        }
+
+        &:hover::after,
+        &:active::after {
+            background: rgba(var(--center-channel-color-rgb), 0.4);
         }
     }
 
