@@ -17,28 +17,13 @@ A new view type that renders cards as draggable bars on a calendar, sized by a d
 <!-- IMG: timeline-view-overview -->
 ![Timeline view overview](docs/images/timeline-view-overview.png)
 
-<!-- IMG: timeline-view-dependencies -->
-![Timeline view with dependency cascade](docs/images/timeline-view-dependencies.png)
-
-<!-- IMG: timeline-view-side-panel-resize -->
-![Resizable side-panel columns](docs/images/timeline-view-side-panel-resize.png)
-
 ### Deadline property + DM reminders
 
 A new `deadline` property type that's a date with a reminder. When the deadline passes, the assigned user (taken from a `Person (notify)` or `Multi person (notify)` property on the same card) receives a Mattermost DM with a link back to the card. No need to leave Boards open — Mattermost itself nudges you.
 
-<!-- IMG: deadline-property-edit -->
-![Deadline property in card detail](docs/images/deadline-property-edit.png)
-
-<!-- IMG: deadline-dm-reminder -->
-![Deadline DM reminder](docs/images/deadline-dm-reminder.png)
-
 ### Person (notify) and Multi person (notify) properties
 
 Variants of the existing `person` / `multiPerson` types that **send a DM to the user** the moment they're added to a card, with the card title and a link. The plain `person` variants stay quiet.
-
-<!-- IMG: person-notify-property -->
-![Person (notify) property assignment](docs/images/person-notify-property.png)
 
 ### Dashboard boards: My Deadlines and All Tasks
 
@@ -52,22 +37,13 @@ Tap either to land on a synthetic, auto-refreshing board with the right cards an
 <!-- IMG: my-deadlines-board -->
 ![My Deadlines dashboard](docs/images/my-deadlines-board.png)
 
-<!-- IMG: all-tasks-board -->
-![All Tasks dashboard](docs/images/all-tasks-board.png)
-
 ### Per-card activity history tab
 
 Card detail now has **two tabs at the bottom**: Comments (the original) and **History**, which lists every property change, title rename, comment add/edit/delete and content-block edit on the card with the user, timestamp and before → after diff. Consecutive edits by the same user to the same property within 30 minutes coalesce into one entry, so a multi-day Timeline drag shows up as a single "5/3 → 5/8" line instead of one entry per day.
 
-<!-- IMG: card-history-tab -->
-![Per-card history tab](docs/images/card-history-tab.png)
-
 ### Subtasks content block
 
 A new content-block type for cards: a checklist that also tells you what state your subtasks are in (todo / in-progress / done counts). Useful for breaking a card down without spawning child cards.
-
-<!-- IMG: subtasks-block -->
-![Subtasks content block](docs/images/subtasks-block.png)
 
 ### Mobile experience
 
@@ -78,10 +54,7 @@ Type `/boards` in any Mattermost channel (works in the mobile app too) and you g
 `/boards` lands on the current team's dashboard; pass an explicit board path to deep-link, e.g. `/boards /boards/team/<teamID>/<boardID>`.
 
 <!-- IMG: boards-slash-command -->
-![/boards slash command result](docs/images/boards-slash-command.png)
-
-<!-- IMG: boards-mobile-browser -->
-![Boards opened in mobile browser via handoff](docs/images/boards-mobile-browser.png)
+![/boards slash command on mobile, opening Boards in the browser already authenticated](docs/images/boards-slash-command.png)
 
 #### Touch UX
 
@@ -90,9 +63,6 @@ Touch DnD requires a 250ms long-press before drag starts, with a 20px scroll-tol
 ### Card detail layout
 
 The Comments + History tabs panel now stretches to the full width of the card body instead of shrinking to the longest comment, matching the content-blocks editor below it.
-
-<!-- IMG: card-detail-fullwidth-tabs -->
-![Comments + History tabs at full card width](docs/images/card-detail-fullwidth-tabs.png)
 
 ### Activity log polish
 
