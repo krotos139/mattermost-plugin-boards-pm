@@ -90,6 +90,12 @@
 }
 
 .CardActivityTabs {
+    // CardDetail uses `align-items: flex-start` on its column flex layout,
+    // which lets each child shrink to its content width. Force the activity
+    // panel to fill the column so the tab strip and the comments below
+    // span the full width of the card body, even when content is short.
+    width: 100%;
+
     &__tabs {
         display: flex;
         gap: 4px;
