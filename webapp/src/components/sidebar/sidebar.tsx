@@ -398,7 +398,10 @@ const Sidebar = (props: Props) => {
                 userIsGuest={me?.is_guest}
             />
 
-            <SidebarDashboardSection activeBoardID={props.activeBoardId}/>
+            <SidebarDashboardSection
+                activeBoardID={props.activeBoardId}
+                hideSidebar={hideSidebar}
+            />
 
             <DragDropContext
                 onDragEnd={onDragEnd}

@@ -65,6 +65,7 @@ const findDashboard = (boards: Board[], kind: string): Board | undefined =>
 
 type Props = {
     activeBoardID?: string
+    hideSidebar?: () => void
 }
 
 const SidebarDashboardSection = (props: Props): JSX.Element | null => {
@@ -79,6 +80,17 @@ const SidebarDashboardSection = (props: Props): JSX.Element | null => {
 
     const [openingKind, setOpeningKind] = useState<string | null>(null)
 
+    const hideSidebarOnMobile = props.hideSidebar
+    // Dashboard views (kanban/gallery/gantt) sometimes mount before their flex
+    // parent has its final dimensions, which leaves them rendered into a tiny
+    // top-left rectangle. A resize event after navigation forces ResizeObserver
+    // and window.resize listeners to recompute, which restores full size.
+    const nudgeLayout = () => {
+        const fire = () => window.dispatchEvent(new Event('resize'))
+        requestAnimationFrame(fire)
+        setTimeout(fire, 200)
+    }
+
     const showView = useCallback((viewId: string, boardId: string) => {
         const params = {...match.params, boardId: boardId || '', viewId: viewId || ''}
         if (boardId !== match.params.boardId && viewId !== match.params.viewId) {
@@ -86,7 +98,9 @@ const SidebarDashboardSection = (props: Props): JSX.Element | null => {
         }
         const newPath = generatePath(Utils.getBoardPagePath(match.path), params)
         history.push(newPath)
-    }, [match, history])
+        hideSidebarOnMobile?.()
+        nudgeLayout()
+    }, [match, history, hideSidebarOnMobile])
 
     const openOrCreate = useCallback(async (kind: string) => {
         if (!teamID) {
@@ -100,11 +114,16 @@ const SidebarDashboardSection = (props: Props): JSX.Element | null => {
             }
             dispatch(updateBoards([board]))
             await dispatch(loadMyBoardsMemberships())
+            // Load board data (views, cards) before navigating so the route
+            // doesn't render a partial/empty state while content streams in.
+            await dispatch(loadBoardData(board.id))
             Utils.showBoard(board.id, match, history)
+            hideSidebarOnMobile?.()
+            nudgeLayout()
         } finally {
             setOpeningKind(null)
         }
-    }, [teamID, dispatch, history, match])
+    }, [teamID, dispatch, history, match, hideSidebarOnMobile])
 
     if (!teamID) {
         return null

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/boards"
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
+	"github.com/mattermost/mattermost-plugin-boards/server/services/handoff"
 
 	pluginapi "github.com/mattermost/mattermost/server/public/pluginapi"
 
@@ -24,6 +26,7 @@ var ErrPluginNotAllowed = errors.New("boards plugin not allowed while Boards pro
 type Plugin struct {
 	plugin.MattermostPlugin
 	boardsApp *boards.BoardsApp
+	handoff   *handoff.Service
 }
 
 func (p *Plugin) OnActivate() error {
@@ -50,7 +53,74 @@ func (p *Plugin) OnActivate() error {
 	model.LogServerInfo(logger)
 
 	p.boardsApp = boardsApp
+	p.handoff = handoff.New(p.MattermostPlugin.API, logger)
+	if err := p.MattermostPlugin.API.RegisterCommand(boardsCommand()); err != nil {
+		logger.Warn("could not register /boards slash command", mlog.Err(err))
+	}
 	return p.boardsApp.Start()
+}
+
+const boardsCommandTrigger = "boards"
+
+func boardsCommand() *mm_model.Command {
+	return &mm_model.Command{
+		Trigger:          boardsCommandTrigger,
+		AutoComplete:     true,
+		AutoCompleteDesc: "Open Boards in your browser, already authenticated",
+		AutoCompleteHint: "[/boards/...]",
+		DisplayName:      "Boards",
+		Description:      "Get a one-time link that opens Boards in your browser without re-logging in",
+	}
+}
+
+// ExecuteCommand handles /boards. It mints a single-use handoff token for the
+// caller and replies with an ephemeral message containing a link the user can
+// tap to land in Boards already authenticated. The optional argument is a
+// path under /boards/ to deep-link into a specific board or view.
+func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *mm_model.CommandArgs) (*mm_model.CommandResponse, *mm_model.AppError) {
+	if p.handoff == nil {
+		return ephemeralResponse("Boards plugin is not fully started yet, please retry in a moment."), nil
+	}
+
+	to := strings.TrimSpace(strings.TrimPrefix(args.Command, "/"+boardsCommandTrigger))
+	if to == "" {
+		// Land on the team route so TeamToBoardAndViewRedirect can pick the
+		// last-opened or first visible board for this user. Without a team
+		// in the URL the webapp lands on an empty "create board" state.
+		if args.TeamId != "" {
+			to = "/boards/team/" + args.TeamId
+		} else {
+			to = "/boards/"
+		}
+	} else if !strings.HasPrefix(to, "/") {
+		to = "/" + to
+	}
+
+	token, err := p.handoff.IssueToken(args.UserId, to)
+	if err != nil {
+		switch err {
+		case handoff.ErrInvalidRedirect:
+			return ephemeralResponse("That path isn't allowed. Try `/boards` for the home view, or `/boards /boards/team/<id>/<board>` for a specific board."), nil
+		case handoff.ErrUnauthorized:
+			return ephemeralResponse("Could not identify your user — please re-login to Mattermost."), nil
+		default:
+			return ephemeralResponse("Could not generate a link, please try again."), nil
+		}
+	}
+
+	siteURL := ""
+	if cfg := p.MattermostPlugin.API.GetConfig(); cfg != nil && cfg.ServiceSettings.SiteURL != nil {
+		siteURL = *cfg.ServiceSettings.SiteURL
+	}
+	link := siteURL + handoff.ConsumePath(token)
+	return ephemeralResponse(fmt.Sprintf("[Open Boards](%s) — link is valid for 60 seconds and works once.", link)), nil
+}
+
+func ephemeralResponse(text string) *mm_model.CommandResponse {
+	return &mm_model.CommandResponse{
+		ResponseType: mm_model.CommandResponseTypeEphemeral,
+		Text:         text,
+	}
 }
 
 // OnConfigurationChange is invoked when configuration changes may have been made.
@@ -99,8 +169,14 @@ func (p *Plugin) GenerateSupportData(ctx *plugin.Context) ([]*mm_model.FileData,
 	return p.boardsApp.GenerateSupportData(ctx)
 }
 
-// ServeHTTP demonstrates a plugin that handles HTTP requests by greeting the world.
+// ServeHTTP routes requests delivered by Mattermost. The /handoff/* surface is
+// owned by the mobile-handoff bridge and bypasses the boards app router; all
+// other paths fall through to the embedded Boards server.
 func (p *Plugin) ServeHTTP(ctx *plugin.Context, w http.ResponseWriter, r *http.Request) {
+	if p.handoff != nil && strings.HasPrefix(r.URL.Path, "/handoff/") {
+		p.handoff.ServeHTTP(w, r)
+		return
+	}
 	p.boardsApp.ServeHTTP(ctx, w, r)
 }
 

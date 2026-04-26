@@ -48,7 +48,10 @@ const App = (props: Props): JSX.Element => {
             locale={language.split(/[_]/)[0]}
             messages={getMessages(language)}
         >
-            <DndProvider backend={Utils.isMobile() ? TouchBackend : HTML5Backend}>
+            <DndProvider
+                backend={Utils.isMobile() ? TouchBackend : HTML5Backend}
+                options={Utils.isMobile() ? {delayTouchStart: 250, touchSlop: 20} : undefined}
+            >
                 <FlashMessages milliseconds={2000}/>
                 <div id='frame'>
                     <div id='main'>
