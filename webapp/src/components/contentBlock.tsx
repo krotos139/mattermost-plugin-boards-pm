@@ -4,10 +4,15 @@
 
 import React, {useState} from 'react'
 import {useIntl} from 'react-intl'
+import {generatePath, useHistory, useRouteMatch} from 'react-router-dom'
 
-import {Card} from '../blocks/card'
+import {Card, createCard} from '../blocks/card'
+import {Block} from '../blocks/block'
 import {ContentBlock as ContentBlockType, IContentBlockWithCords} from '../blocks/contentBlock'
 import mutator from '../mutator'
+import {useAppDispatch, useAppSelector} from '../store/hooks'
+import {setCurrent as setCurrentCard, addCard as addCardAction} from '../store/cards'
+import {updateView, getCurrentView} from '../store/views'
 import {Utils} from '../utils'
 import IconButton from '../widgets/buttons/iconButton'
 import AddIcon from '../widgets/icons/add'
@@ -39,6 +44,10 @@ type Props = {
 const ContentBlock = (props: Props): JSX.Element => {
     const {card, block, readonly, cords} = props
     const intl = useIntl()
+    const history = useHistory()
+    const match = useRouteMatch<{boardId?: string, viewId?: string, cardId?: string}>()
+    const dispatch = useAppDispatch()
+    const activeView = useAppSelector(getCurrentView)
     const [, , gripRef, itemRef] = useSortableWithGrip('content', {block, cords}, true, () => {})
     const [, isOver2,, itemRef2] = useSortableWithGrip('content', {block, cords}, true, (src, dst) => props.onDrop(src, dst, 'right'))
     const [, isOver3,, itemRef3] = useSortableWithGrip('content', {block, cords}, true, (src, dst) => props.onDrop(src, dst, 'left'))
@@ -111,6 +120,56 @@ const ContentBlock = (props: Props): JSX.Element => {
                                     />
                                 ))}
                             </Menu.SubMenu>
+                            {block.type === 'subtask' &&
+                                <Menu.Text
+                                    icon={<AddIcon/>}
+                                    id='convertToTask'
+                                    name={intl.formatMessage({id: 'ContentBlock.convertSubtaskToTask', defaultMessage: 'Convert to task'})}
+                                    onClick={() => {
+                                        const description = intl.formatMessage({id: 'ContentBlock.convertSubtaskToTaskAction', defaultMessage: 'convert subtask to task'})
+                                        const newCard = createCard()
+                                        newCard.parentId = card.boardId
+                                        newCard.boardId = card.boardId
+                                        newCard.title = block.title
+                                        newCard.fields.properties = {...card.fields.properties}
+
+                                        if (colIndex > -1) {
+                                            (contentOrder[index] as string[]).splice(colIndex, 1)
+                                        } else {
+                                            contentOrder.splice(index, 1)
+                                        }
+                                        if (Array.isArray(contentOrder[index]) && contentOrder[index].length === 1) {
+                                            contentOrder[index] = contentOrder[index][0]
+                                        }
+
+                                        mutator.performAsUndoGroup(async () => {
+                                            const inserted = await mutator.insertBlock(newCard.boardId, newCard as Block, description)
+                                            await mutator.deleteBlock(block, description)
+                                            await mutator.changeCardContentOrder(props.card.boardId, card.id, card.fields.contentOrder, contentOrder, description)
+
+                                            // Close the current card editor and open the
+                                            // freshly-created task. mutator.insertBlock
+                                            // doesn't push the new block to the redux
+                                            // store on its own (relies on WS) — dispatch
+                                            // addCard manually so the dialog has data to
+                                            // render before the WS event arrives. Mirror
+                                            // centerPanel.addCard's "show" path.
+                                            const newId = inserted?.id || newCard.id
+                                            const insertedCard = createCard(inserted || (newCard as Block))
+                                            dispatch(addCardAction(insertedCard))
+                                            if (activeView) {
+                                                dispatch(updateView({...activeView, fields: {...activeView.fields, cardOrder: [...activeView.fields.cardOrder, newId]}}))
+                                            }
+                                            dispatch(setCurrentCard(newId))
+                                            if (match?.path) {
+                                                const params = {...match.params, cardId: newId}
+                                                const newPath = generatePath(Utils.getBoardPagePath(match.path), params)
+                                                history.push(newPath)
+                                            }
+                                        })
+                                    }}
+                                />
+                            }
                             <Menu.Text
                                 icon={<DeleteIcon/>}
                                 id='delete'

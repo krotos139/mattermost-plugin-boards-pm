@@ -1,0 +1,39 @@
+.SubtasksDistribution {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+
+    &__chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 18px;
+        padding: 0 6px;
+        border-radius: 3px;
+        font-size: 11px;
+        font-weight: 600;
+        line-height: 1;
+        // The .Label colors live on a span class — reuse them by inheriting
+        // the `Label` palette via shared modifier class names (propColorRed,
+        // propColorBlue, ...). We don't pull in `.Label` itself because it
+        // adds horizontal padding and a non-monospace font.
+        color: rgb(var(--center-channel-color-rgb));
+        background: rgba(var(--center-channel-color-rgb), 0.08);
+    }
+
+    // Mirror Label colors. These match `.Label.propColor*` palette in
+    // `widgets/label.scss`; we intentionally duplicate the rules so the
+    // chip stays small and doesn't inherit Label's full styling.
+    &__chip.propColorDefault { background: var(--prop-default); }
+    &__chip.propColorGray    { background: var(--prop-gray); color: rgba(var(--center-channel-color-rgb), 0.9); }
+    &__chip.propColorBrown   { background: var(--prop-brown); }
+    &__chip.propColorOrange  { background: var(--prop-orange); }
+    &__chip.propColorYellow  { background: var(--prop-yellow); color: rgba(0, 0, 0, 0.85); }
+    &__chip.propColorGreen   { background: var(--prop-green); }
+    &__chip.propColorBlue    { background: var(--prop-blue); }
+    &__chip.propColorPurple  { background: var(--prop-purple); }
+    &__chip.propColorPink    { background: var(--prop-pink); }
+    &__chip.propColorRed     { background: var(--prop-red); }
+}

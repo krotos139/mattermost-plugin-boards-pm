@@ -84,7 +84,7 @@ type BoardsAndBlocksPatch = {
     blockPatches: BlockPatch[]
 }
 
-type PropertyTypeEnum = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'deadline' | 'person' | 'multiPerson' | 'personNotify' | 'multiPersonNotify' | 'task' | 'multiTask' | 'file' | 'checkbox' | 'url' | 'email' | 'phone' | 'createdTime' | 'createdBy' | 'updatedTime' | 'updatedBy' | 'unknown'
+type PropertyTypeEnum = 'text' | 'number' | 'select' | 'multiSelect' | 'date' | 'deadline' | 'person' | 'multiPerson' | 'personNotify' | 'multiPersonNotify' | 'task' | 'multiTask' | 'file' | 'checkbox' | 'url' | 'email' | 'phone' | 'createdTime' | 'createdBy' | 'updatedTime' | 'updatedBy' | 'subtasksDistribution' | 'unknown'
 
 interface IPropertyOption {
     id: string

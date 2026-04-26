@@ -3,6 +3,7 @@
     align-items: center;
     margin-top: 4px;
     height: 24px;
+    flex-wrap: wrap;
 
     span {
         display: flex;
@@ -14,6 +15,39 @@
             color: rgba(var(--center-channel-color-rgb), 0.64);
             fill: currentColor;
             margin-right: 4px;
+        }
+    }
+
+    &__subtasks {
+        gap: 3px;
+
+        // Nested under &__subtasks to outrank `.CardBadges span` (which sets
+        // display:flex + margin-right:4px) — gives 0,2,0 vs the parent's 0,1,1.
+        .CardBadges__subtaskChip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 18px;
+            height: 16px;
+            padding: 0 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1;
+            margin-right: 0;
+            color: rgb(var(--center-channel-color-rgb));
+            background: rgba(var(--center-channel-color-rgb), 0.08);
+
+            &.propColorDefault { background: var(--prop-default); }
+            &.propColorGray    { background: var(--prop-gray); color: rgba(var(--center-channel-color-rgb), 0.9); }
+            &.propColorBrown   { background: var(--prop-brown); }
+            &.propColorOrange  { background: var(--prop-orange); }
+            &.propColorYellow  { background: var(--prop-yellow); color: rgba(0, 0, 0, 0.85); }
+            &.propColorGreen   { background: var(--prop-green); }
+            &.propColorBlue    { background: var(--prop-blue); }
+            &.propColorPurple  { background: var(--prop-purple); }
+            &.propColorPink    { background: var(--prop-pink); }
+            &.propColorRed     { background: var(--prop-red); }
         }
     }
 }

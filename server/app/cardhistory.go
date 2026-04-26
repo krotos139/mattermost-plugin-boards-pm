@@ -208,7 +208,7 @@ func creationKindFor(t model.BlockType) model.HistoryEventKind {
 	switch t {
 	case model.TypeComment:
 		return model.HistoryEventCommentAdded
-	case model.TypeText, model.TypeCheckbox, model.TypeImage, model.TypeDivider, model.TypeAttachment:
+	case model.TypeText, model.TypeCheckbox, model.TypeSubtask, model.TypeImage, model.TypeDivider, model.TypeAttachment:
 		return model.HistoryEventDescAdded
 	}
 	return ""
@@ -218,7 +218,7 @@ func removalKindFor(t model.BlockType) model.HistoryEventKind {
 	switch t {
 	case model.TypeComment:
 		return model.HistoryEventCommentRemoved
-	case model.TypeText, model.TypeCheckbox, model.TypeImage, model.TypeDivider, model.TypeAttachment:
+	case model.TypeText, model.TypeCheckbox, model.TypeSubtask, model.TypeImage, model.TypeDivider, model.TypeAttachment:
 		return model.HistoryEventDescRemoved
 	}
 	return model.HistoryEventDescRemoved
@@ -319,7 +319,7 @@ func editKindFor(t model.BlockType) model.HistoryEventKind {
 	switch t {
 	case model.TypeComment:
 		return model.HistoryEventCommentEdited
-	case model.TypeText, model.TypeCheckbox:
+	case model.TypeText, model.TypeCheckbox, model.TypeSubtask:
 		return model.HistoryEventDescEdited
 	}
 	return ""

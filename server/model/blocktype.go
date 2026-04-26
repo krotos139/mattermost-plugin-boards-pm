@@ -20,6 +20,7 @@ const (
 	TypeView       = "view"
 	TypeText       = "text"
 	TypeCheckbox   = "checkbox"
+	TypeSubtask    = "subtask"
 	TypeComment    = "comment"
 	TypeImage      = "image"
 	TypeAttachment = "attachment"
@@ -43,6 +44,8 @@ func BlockTypeFromString(s string) (BlockType, error) {
 		return TypeText, nil
 	case "checkbox":
 		return TypeCheckbox, nil
+	case "subtask":
+		return TypeSubtask, nil
 	case "comment":
 		return TypeComment, nil
 	case "image":
@@ -64,7 +67,7 @@ func BlockType2IDType(blockType BlockType) utils.IDType {
 		return utils.IDTypeCard
 	case TypeView:
 		return utils.IDTypeView
-	case TypeText, TypeCheckbox, TypeComment, TypeDivider:
+	case TypeText, TypeCheckbox, TypeSubtask, TypeComment, TypeDivider:
 		return utils.IDTypeBlock
 	case TypeImage, TypeAttachment:
 		return utils.IDTypeAttachment

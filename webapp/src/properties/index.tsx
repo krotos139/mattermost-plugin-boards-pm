@@ -23,6 +23,7 @@ import MultiPersonNotifyProperty from './multipersonNotify/property'
 import TaskProperty from './task/property'
 import MultiTaskProperty from './multitask/property'
 import CheckboxProperty from './checkbox/property'
+import SubtasksDistributionProperty from './subtasksDistribution/property'
 import UnknownProperty from './unknown/property'
 
 import {PropertyType} from './types'
@@ -72,5 +73,6 @@ registry.register(new CreatedTimeProperty())
 registry.register(new CreatedByProperty())
 registry.register(new UpdatedTimeProperty())
 registry.register(new UpdatedByProperty())
+registry.register(new SubtasksDistributionProperty())
 
 export default registry

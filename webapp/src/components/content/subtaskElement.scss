@@ -1,0 +1,26 @@
+.SubtaskElement {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+    gap: 10px;
+
+    &__state {
+        flex: 0 0 auto;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+
+        &--readonly {
+            cursor: default;
+        }
+    }
+
+    .MenuWrapper {
+        display: inline-flex;
+    }
+
+    .Editable {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+}

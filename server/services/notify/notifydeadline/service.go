@@ -305,9 +305,12 @@ func collectRecipients(cardProps map[string]interface{}, notifyPropIDs []string)
 }
 
 // parseDeadlineMillis decodes the on-card representation of a date/deadline
-// property value into a unix-millis "from" timestamp. The frontend stores
-// either a plain millis-string ("1700000000000") or a JSON object with at
-// least a `from` field. Returns ok=false for empty/invalid values.
+// property value into the unix-millis timestamp the notification offset is
+// measured from. The frontend stores either a plain millis-string
+// ("1700000000000") or a JSON object `{from, to?}`. For a range the deadline
+// is the END date (`to`) — that's the moment the work is due, so the offset
+// counts back from there. Falls back to `from` for single-date values.
+// Returns ok=false for empty/invalid values.
 func parseDeadlineMillis(raw interface{}) (int64, bool) {
 	s, ok := raw.(string)
 	if !ok || s == "" {
@@ -318,9 +321,15 @@ func parseDeadlineMillis(raw interface{}) (int64, bool) {
 	}
 	var obj struct {
 		From int64 `json:"from"`
+		To   int64 `json:"to"`
 	}
-	if err := json.Unmarshal([]byte(s), &obj); err == nil && obj.From > 0 {
-		return obj.From, true
+	if err := json.Unmarshal([]byte(s), &obj); err == nil {
+		if obj.To > 0 {
+			return obj.To, true
+		}
+		if obj.From > 0 {
+			return obj.From, true
+		}
 	}
 	return 0, false
 }

@@ -4,8 +4,12 @@
     // HACK: Fixes Chrome drag and drop preview
     transform: translate3d(0, 0, 0);
 
-    .MenuWrapper,
-    .dnd-handle {
+    // Only hide the row's own options/drag handles by default, not every
+    // .MenuWrapper anywhere inside the block — content elements can have
+    // their own menus that need to stay visible (e.g. SubtaskElement's
+    // state picker).
+    > .octo-block-margin > .MenuWrapper,
+    > .octo-block-margin > .dnd-handle {
         display: none;
     }
 
@@ -13,11 +17,11 @@
     &.menuOpened {
         @include z-index(menu);
 
-        .MenuWrapper {
+        > .octo-block-margin > .MenuWrapper {
             display: flex;
         }
 
-        .dnd-handle {
+        > .octo-block-margin > .dnd-handle {
             display: flex;
             opacity: 0.8;
             height: 18px;

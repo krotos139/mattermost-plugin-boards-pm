@@ -874,6 +874,22 @@ class Mutator {
         )
     }
 
+    // Board-level pointer to the select-property whose options drive subtask
+    // states. Setting a board property: BoardPatch uses
+    // `updatedProperties` / `deletedProperties` (the analogue of
+    // `updatedFields` / `deletedFields` on blocks), so we reuse the same
+    // "set or clear" trick `patchOrDelete` does for blocks.
+    async changeBoardSubtaskStatesPropertyId(boardId: string, oldId: string|undefined, newId: string|undefined): Promise<void> {
+        const apply = (id: string|undefined) => async () => {
+            if (id === undefined) {
+                await octoClient.patchBoard(boardId, {deletedProperties: ['subtaskStatesPropertyId']})
+            } else {
+                await octoClient.patchBoard(boardId, {updatedProperties: {subtaskStatesPropertyId: id}})
+            }
+        }
+        await undoManager.perform(apply(newId), apply(oldId), 'subtask states property', this.undoGroupId)
+    }
+
     async changeViewColorPropertyId(boardId: string, viewId: string, oldColorPropertyId: string|undefined, colorPropertyId: string|undefined): Promise<void> {
         await undoManager.perform(
             async () => {

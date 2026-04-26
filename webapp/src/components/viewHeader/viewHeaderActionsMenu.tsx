@@ -6,13 +6,15 @@ import {useIntl, IntlShape} from 'react-intl'
 
 import {CsvExporter} from '../../csvExporter'
 import {Archiver} from '../../archiver'
-import {Board} from '../../blocks/board'
+import {Board, IPropertyTemplate} from '../../blocks/board'
 import {BoardView} from '../../blocks/boardView'
 import {Card} from '../../blocks/card'
 import IconButton from '../../widgets/buttons/iconButton'
 import OptionsIcon from '../../widgets/icons/options'
+import CheckIcon from '../../widgets/icons/check'
 import Menu from '../../widgets/menu'
 import MenuWrapper from '../../widgets/menuWrapper'
+import mutator from '../../mutator'
 import {Utils} from '../../utils'
 
 import ModalWrapper from '../modalWrapper'
@@ -99,6 +101,9 @@ const ViewHeaderActionsMenu = (props: Props) => {
     const {board, activeView, cards} = props
     const intl = useIntl()
 
+    const selectProperties = (board.cardProperties || []).filter((p: IPropertyTemplate) => p.type === 'select')
+    const currentSubtaskStatesPropertyId = (board.properties as Record<string, string|undefined> | undefined)?.subtaskStatesPropertyId
+
     return (
         <ModalWrapper>
             <MenuWrapper label={intl.formatMessage({id: 'ViewHeader.view-header-menu', defaultMessage: 'View header menu'})}>
@@ -114,6 +119,46 @@ const ViewHeaderActionsMenu = (props: Props) => {
                         name={intl.formatMessage({id: 'ViewHeader.export-board-archive', defaultMessage: 'Export board archive'})}
                         onClick={() => Archiver.exportBoardArchive(board)}
                     />
+                    <Menu.Separator/>
+                    <Menu.SubMenu
+                        id='subtaskStatesProperty'
+                        name={intl.formatMessage({id: 'BoardSettings.subtaskStatesProperty', defaultMessage: 'Subtask states property'})}
+                        position='left-bottom'
+                    >
+                        <Menu.Text
+                            id='__none'
+                            name={intl.formatMessage({id: 'BoardSettings.subtaskStatesProperty.none', defaultMessage: 'None'})}
+                            rightIcon={!currentSubtaskStatesPropertyId ? <CheckIcon/> : undefined}
+                            onClick={() => {
+                                if (!currentSubtaskStatesPropertyId) {
+                                    return
+                                }
+                                mutator.changeBoardSubtaskStatesPropertyId(board.id, currentSubtaskStatesPropertyId, undefined)
+                            }}
+                        />
+                        {selectProperties.length > 0 && <Menu.Separator/>}
+                        {selectProperties.map((p: IPropertyTemplate) => (
+                            <Menu.Text
+                                key={p.id}
+                                id={p.id}
+                                name={p.name}
+                                rightIcon={currentSubtaskStatesPropertyId === p.id ? <CheckIcon/> : undefined}
+                                onClick={(id) => {
+                                    if (currentSubtaskStatesPropertyId === id) {
+                                        return
+                                    }
+                                    mutator.changeBoardSubtaskStatesPropertyId(board.id, currentSubtaskStatesPropertyId, id)
+                                }}
+                            />
+                        ))}
+                        {selectProperties.length === 0 && (
+                            <Menu.Text
+                                id='__no-select-property'
+                                name={intl.formatMessage({id: 'BoardSettings.subtaskStatesProperty.empty', defaultMessage: 'No select properties on this board'})}
+                                onClick={() => {}}
+                            />
+                        )}
+                    </Menu.SubMenu>
                     {/*
                     <Menu.Separator/>
 
