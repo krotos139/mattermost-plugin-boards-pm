@@ -190,7 +190,7 @@ python repack_plugin.py boards-pm.tar.gz
 ## Tracking upstream
 
 ```bash
-git remote add upstream https://github.com/mattermost/mattermost-plugin-boards.git
+git remote add upstream https://github.com/krotos139/mattermost-plugin-boards-pm.git
 git fetch upstream
 git merge upstream/main          # or rebase if you prefer
 ```
