@@ -128,39 +128,10 @@ func (a *API) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 	var block *model.Block
 	switch {
 	case board.IsSystemBoard():
-		// System (dashboard) boards: views/content blocks live in DB as usual,
-		// but card blocks are virtual — synthesised from the user's other boards.
-		realBlocks, rerr := a.app.GetBlocksForBoard(boardID)
-		if rerr != nil {
-			a.errorResponse(w, r, rerr)
+		blocks, err = a.getSystemBoardBlocks(board, userID, blockType, blockID)
+		if err != nil {
+			a.errorResponse(w, r, err)
 			return
-		}
-		for _, b := range realBlocks {
-			if b.Type == model.TypeCard {
-				// Persisted card blocks aren't expected on a system board, but skip
-				// just in case so they don't shadow virtual ones.
-				continue
-			}
-			if blockType != "" && string(b.Type) != blockType {
-				continue
-			}
-			if blockID != "" && b.ID != blockID {
-				continue
-			}
-			blocks = append(blocks, b)
-		}
-		if blockType == "" || blockType == string(model.TypeCard) {
-			virtuals, vErr := a.app.GetDashboardCards(board, userID)
-			if vErr != nil {
-				a.errorResponse(w, r, vErr)
-				return
-			}
-			for _, vc := range virtuals {
-				if blockID != "" && vc.ID != blockID {
-					continue
-				}
-				blocks = append(blocks, vc)
-			}
 		}
 	case all != "":
 		blocks, err = a.app.GetBlocksForBoard(boardID)
@@ -207,6 +178,45 @@ func (a *API) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 
 	auditRec.AddMeta("blockCount", len(blocks))
 	auditRec.Success()
+}
+
+// getSystemBoardBlocks returns the blocks visible on a dashboard ("system")
+// board: the persisted views and content blocks plus the virtual cards
+// synthesised from other boards on the fly. Extracted from handleGetBlocks
+// to keep that handler under the gocyclo threshold.
+func (a *API) getSystemBoardBlocks(board *model.Board, userID, blockType, blockID string) ([]*model.Block, error) {
+	realBlocks, err := a.app.GetBlocksForBoard(board.ID)
+	if err != nil {
+		return nil, err
+	}
+	var blocks []*model.Block
+	for _, b := range realBlocks {
+		if b.Type == model.TypeCard {
+			// Persisted card blocks aren't expected on a system board, but skip
+			// just in case so they don't shadow virtual ones.
+			continue
+		}
+		if blockType != "" && string(b.Type) != blockType {
+			continue
+		}
+		if blockID != "" && b.ID != blockID {
+			continue
+		}
+		blocks = append(blocks, b)
+	}
+	if blockType == "" || blockType == string(model.TypeCard) {
+		virtuals, vErr := a.app.GetDashboardCards(board, userID)
+		if vErr != nil {
+			return nil, vErr
+		}
+		for _, vc := range virtuals {
+			if blockID != "" && vc.ID != blockID {
+				continue
+			}
+			blocks = append(blocks, vc)
+		}
+	}
+	return blocks, nil
 }
 
 func (a *API) handlePostBlocks(w http.ResponseWriter, r *http.Request) {

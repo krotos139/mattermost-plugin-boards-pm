@@ -38,7 +38,7 @@ func (s *SQLStore) isDeadlineNotificationSent(db sq.BaseRunner, cardID string, p
 // (e.g. from a second plugin instance) is silently ignored.
 func (s *SQLStore) markDeadlineNotificationSent(db sq.BaseRunner, cardID string, propertyID string, deadlineAt int64) error {
 	query := s.getQueryBuilder(db).
-		Insert(s.tablePrefix + "deadline_notifications").
+		Insert(s.tablePrefix+"deadline_notifications").
 		Columns("card_id", "property_id", "deadline_at", "notified_at").
 		Values(cardID, propertyID, deadlineAt, utils.GetMillis())
 

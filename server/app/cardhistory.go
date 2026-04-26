@@ -13,11 +13,16 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 )
+
+// ErrBoardNotFoundForHistory is returned by GetCardHistory when the lookup
+// for the parent board returns no rows. Distinct from a store-level error.
+var ErrBoardNotFoundForHistory = errors.New("board not found")
 
 // historyEventCap caps the number of events returned to the frontend.
 // 100 keeps the payload small enough to render without virtualization;
@@ -38,7 +43,7 @@ func (a *App) GetCardHistory(boardID, cardID string) ([]*model.CardHistoryEvent,
 		return nil, fmt.Errorf("get board for history: %w", err)
 	}
 	if board == nil {
-		return nil, fmt.Errorf("board %s not found", boardID)
+		return nil, fmt.Errorf("%w: %s", ErrBoardNotFoundForHistory, boardID)
 	}
 
 	// Pull the entire subtree history in insert_at ASC order so we can walk

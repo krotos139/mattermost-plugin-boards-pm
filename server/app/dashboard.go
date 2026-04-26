@@ -10,6 +10,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -17,6 +18,10 @@ import (
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/utils"
 )
+
+// ErrUnknownDashboardKind is returned by GetDashboardBoard when the requested
+// kind doesn't match any registered dashboard generator.
+var ErrUnknownDashboardKind = errors.New("unknown dashboard kind")
 
 // Dashboard property IDs are stable, hardcoded strings (not random utils.NewID)
 // so views referencing them survive plugin restarts and the property layout
@@ -99,7 +104,7 @@ func dashboardIcon(kind string) string {
 // kind in the given team, creating it lazily on first call.
 func (a *App) GetOrCreateDashboardBoard(userID string, teamID string, kind string) (*model.Board, error) {
 	if dashboardCardProperties(kind) == nil {
-		return nil, fmt.Errorf("unknown dashboard kind: %s", kind)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownDashboardKind, kind)
 	}
 
 	// Look for an existing one. Lookup is by userID+teamID+kind in memory —
@@ -416,10 +421,10 @@ func (a *App) CollectDashboardAssigneeUserIDs(board *model.Board, userID string)
 // dashboard synthesis: the deadline, person-notify recipients, the broader
 // "any person-typed" set used by All Tasks, and the (first) select used as Status.
 type sourceBoardIndex struct {
-	deadlinePropID   string
-	notifyPropIDs    []string
-	assigneePropIDs  []string
-	statusPropID     string
+	deadlinePropID  string
+	notifyPropIDs   []string
+	assigneePropIDs []string
+	statusPropID    string
 }
 
 func indexSourceBoard(cardProperties []map[string]interface{}) sourceBoardIndex {

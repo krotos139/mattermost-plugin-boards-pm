@@ -4,6 +4,7 @@
 package plugindelivery
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/services/notify"
@@ -17,11 +18,16 @@ const (
 	personAddedTemplate = "@%s added you to **%s** on the card [%s](%s) in board [%s](%s)"
 )
 
+// ErrMissingPersonAddModifier is returned when a person-add notification event
+// arrives without a ModifiedBy field — there is no actor to attribute the DM
+// to so delivery is refused.
+var ErrMissingPersonAddModifier = errors.New("missing modifier for person-add notification")
+
 // PersonAddedDeliver sends a DM notifying a user that they were added to a
 // person-typed property (with notifications enabled) on a card.
 func (pd *PluginDelivery) PersonAddedDeliver(addedUserID string, propertyName string, evt notify.BlockChangeEvent) error {
 	if evt.ModifiedBy == nil {
-		return fmt.Errorf("missing modifier for person-add notification")
+		return ErrMissingPersonAddModifier
 	}
 	author, err := pd.api.GetUserByID(evt.ModifiedBy.UserID)
 	if err != nil {

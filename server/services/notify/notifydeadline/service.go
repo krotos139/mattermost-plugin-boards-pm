@@ -74,7 +74,7 @@ func New(params Params) *Service {
 	}
 }
 
-// Run blocks until ctx is cancelled, ticking every TickInterval. One immediate
+// Run blocks until ctx is canceled, ticking every TickInterval. One immediate
 // tick is fired on entry so freshly-installed plugins catch up without waiting.
 func (s *Service) Run(ctx context.Context) {
 	s.logger.Info("Deadline notification ticker started", mlog.Duration("interval", TickInterval))
@@ -128,8 +128,8 @@ func (s *Service) runOnce(ctx context.Context) {
 // boardPropertyIndex caches which cardProperties of a board are deadline-typed
 // or person-notify-typed, so we don't recompute per card.
 type boardPropertyIndex struct {
-	deadlines  []deadlineProp // (id, name, offsetMin)
-	notifyIDs  []string       // person/multi-person notify property IDs
+	deadlines []deadlineProp // (id, name, offsetMin)
+	notifyIDs []string       // person/multi-person notify property IDs
 }
 
 type deadlineProp struct {

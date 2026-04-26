@@ -98,10 +98,10 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *mm_model.CommandArgs) (
 
 	token, err := p.handoff.IssueToken(args.UserId, to)
 	if err != nil {
-		switch err {
-		case handoff.ErrInvalidRedirect:
+		switch {
+		case errors.Is(err, handoff.ErrInvalidRedirect):
 			return ephemeralResponse("That path isn't allowed. Try `/boards` for the home view, or `/boards /boards/team/<id>/<board>` for a specific board."), nil
-		case handoff.ErrUnauthorized:
+		case errors.Is(err, handoff.ErrUnauthorized):
 			return ephemeralResponse("Could not identify your user — please re-login to Mattermost."), nil
 		default:
 			return ephemeralResponse("Could not generate a link, please try again."), nil

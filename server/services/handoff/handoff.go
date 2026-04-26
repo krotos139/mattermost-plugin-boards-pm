@@ -3,16 +3,16 @@
 // user to log in again.
 //
 // Flow:
-//   1. Mobile app (already authenticated to MM) POSTs /handoff/issue with an
-//      optional `to` path. We trust the Mattermost-User-Id header that the MM
-//      router injects after auth; that's the standard plugin-handler contract.
-//   2. We mint a short-lived single-use token bound to that user and the
-//      requested redirect target, and return it.
-//   3. Mobile app opens https://<server>/plugins/focalboard/handoff/consume?t=<token>
-//      in the system browser.
-//   4. Consume validates the token, mints a fresh MM session via plugin.API,
-//      sets the three session cookies (MMAUTHTOKEN/MMUSERID/MMCSRF), and 302s
-//      to the stored target.
+//  1. Mobile app (already authenticated to MM) POSTs /handoff/issue with an
+//     optional `to` path. We trust the Mattermost-User-Id header that the MM
+//     router injects after auth; that's the standard plugin-handler contract.
+//  2. We mint a short-lived single-use token bound to that user and the
+//     requested redirect target, and return it.
+//  3. Mobile app opens https://<server>/plugins/focalboard/handoff/consume?t=<token>
+//     in the system browser.
+//  4. Consume validates the token, mints a fresh MM session via plugin.API,
+//     sets the three session cookies (MMAUTHTOKEN/MMUSERID/MMCSRF), and 302s
+//     to the stored target.
 package handoff
 
 import (
@@ -140,12 +140,13 @@ func (s *Service) issue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token, err := s.IssueToken(userID, to)
-	switch err {
-	case nil:
-	case ErrUnauthorized:
+	switch {
+	case err == nil:
+		// proceed
+	case errors.Is(err, ErrUnauthorized):
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
-	case ErrInvalidRedirect:
+	case errors.Is(err, ErrInvalidRedirect):
 		http.Error(w, "invalid redirect target", http.StatusBadRequest)
 		return
 	default:
