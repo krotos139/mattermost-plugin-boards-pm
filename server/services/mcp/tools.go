@@ -34,6 +34,7 @@ type toolEntry struct {
 // discovery / read-only tools first.
 func (s *Server) buildTools() map[string]toolHandler {
 	entries := []toolEntry{
+		s.toolGetCurrentUser(),
 		s.toolListMyBoards(),
 		s.toolGetBoardInfo(),
 		s.toolSearchCards(),
@@ -368,6 +369,46 @@ func (s *Server) resolveAssigneeID(callerID, raw string) (string, error) {
 		return "", fmt.Errorf("user not found: %s", raw)
 	}
 	return user.Id, nil
+}
+
+// =====================================================================
+// get_current_user
+// =====================================================================
+
+type currentUserInfo struct {
+	UserID    string `json:"user_id"`
+	Username  string `json:"username,omitempty"`
+	Email     string `json:"email,omitempty"`
+	FirstName string `json:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty"`
+	Nickname  string `json:"nickname,omitempty"`
+}
+
+func (s *Server) toolGetCurrentUser() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "get_current_user",
+			Description: "Returns identity info for the user this MCP session is running as: user_id, username, email, first/last name. Use this whenever you need to know who 'me' is — for example to display the user's name, to address them, or when another tool requires a username instead of the \"me\" sentinel. You usually do NOT need to call this for assigning cards: every Boards tool that takes assigned_to / assignee accepts the literal string \"me\", which is resolved server-side to the calling user's id.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"properties": {}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, _ json.RawMessage) (toolsCallResult, error) {
+			u, appErr := s.api.GetUser(userID)
+			if appErr != nil || u == nil {
+				return toolError("could not load user %s: %v", userID, appErr), nil
+			}
+			return toolJSON(currentUserInfo{
+				UserID:    u.Id,
+				Username:  u.Username,
+				Email:     u.Email,
+				FirstName: u.FirstName,
+				LastName:  u.LastName,
+				Nickname:  u.Nickname,
+			})
+		},
+	}
 }
 
 // =====================================================================
@@ -1049,7 +1090,7 @@ func (s *Server) toolCreateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "create_card",
-			Description: "Creates a new card on a board. Title is required. assigned_to / status / priority / due_date are convenience shortcuts mapped onto the board's actual property templates (Person*, Status select, Priority select, Deadline / Date) — call get_board_info() first if you don't know what's available. Pass `properties` for any field you need to set explicitly by id.",
+			Description: "Creates a new card on a board. Title is required. assigned_to accepts the literal \"me\" (the user calling this tool, no need to ask them for an id) or a Mattermost username. status / priority / due_date are convenience shortcuts mapped onto the board's actual property templates (Person*, Status select, Priority select, Deadline / Date) — call get_board_info() first if you don't know what's available. Pass `properties` for any field you need to set explicitly by id.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["board_id", "title"],
@@ -1217,7 +1258,7 @@ func (s *Server) toolUpdateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "update_card",
-			Description: "Updates an existing card. Pass `changes` as a dict; recognised keys are title, description, assigned_to, status, priority, due_date, properties. Properties is a partial map (id -> value) merged into the card's existing properties. Use this for status transitions ('move to Done'), reassignment, due-date updates, etc.",
+			Description: "Updates an existing card. Pass `changes` as a dict; recognised keys are title, description, assigned_to, status, priority, due_date, properties. assigned_to accepts the literal \"me\" (the user calling this tool — never ask them for their id, just pass \"me\") or a Mattermost username. Properties is a partial map (id -> value) merged into the card's existing properties. Use this for status transitions ('move to Done'), reassignment, due-date updates, etc.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "changes"],
