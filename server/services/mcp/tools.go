@@ -1268,8 +1268,21 @@ func (s *Server) toolUpdateCard() toolEntry {
 					return toolError("%v", err), nil
 				}
 			}
+			// Merge with the card's existing properties before sending the
+			// patch. Boards' BlockPatch.Patch overwrites block.Fields["properties"]
+			// wholesale with whatever map we put in CardPatch.UpdatedProperties,
+			// so a partial map would drop every untouched property (status,
+			// assignee, dates, etc.). The webapp avoids this by always sending
+			// the full merged map; we have to do the same.
 			if len(updatedProps) > 0 {
-				patch.UpdatedProperties = updatedProps
+				merged := make(map[string]interface{}, len(existing.Properties)+len(updatedProps))
+				for k, v := range existing.Properties {
+					merged[k] = v
+				}
+				for k, v := range updatedProps {
+					merged[k] = v
+				}
+				patch.UpdatedProperties = merged
 			}
 
 			// Description: replace by deleting old text content blocks and
