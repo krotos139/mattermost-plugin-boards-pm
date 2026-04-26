@@ -626,25 +626,30 @@ type searchCardsArgs struct {
 // cardSummary is a search-result row: card identity, title, key properties
 // resolved to human labels, and the parent board id so the agent can fetch
 // the full board context if needed.
+//
+// Status / Priority / DueDate / Assignees are deliberately serialised even
+// when empty (no `omitempty`) so every result row has a uniform shape — an
+// MCP client that scans for "the status field is missing" wouldn't end up
+// silently dropping cards that simply don't have a status set yet.
 type cardSummary struct {
 	ID         string                 `json:"id"`
 	BoardID    string                 `json:"board_id"`
-	BoardTitle string                 `json:"board_title,omitempty"`
+	BoardTitle string                 `json:"board_title"`
 	Title      string                 `json:"title"`
-	Status     string                 `json:"status,omitempty"`
-	Priority   string                 `json:"priority,omitempty"`
-	Assignees  []string               `json:"assignees,omitempty"`
-	DueDate    string                 `json:"due_date,omitempty"`
+	Status     string                 `json:"status"`
+	Priority   string                 `json:"priority"`
+	Assignees  []string               `json:"assignees"`
+	DueDate    string                 `json:"due_date"`
 	UpdateAt   int64                  `json:"update_at"`
 	UpdateISO  string                 `json:"update_iso"`
-	Properties map[string]interface{} `json:"properties,omitempty"`
+	Properties map[string]interface{} `json:"properties"`
 }
 
 func (s *Server) toolSearchCards() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "search_cards",
-			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. Common patterns: assigned_to=\"me\" for the user's own tasks, due_date_range=\"overdue\"/\"today\"/\"this_week\"/\"next_week\" or a YYYY-MM-DD..YYYY-MM-DD range, status / priority match (case-insensitively) any select-property option label, text_query matches title text. Set assigned_to=\"any\" for team-wide search, \"unassigned\" for unclaimed work.",
+			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default ALL cards on the matched board(s) are returned, including cards that have no status, priority, due date or assignee set yet — those fields just come back as empty strings. Pass status / priority / assigned_to / due_date_range to narrow the result. assigned_to accepts \"me\" (the calling user), a username, \"any\" (team-wide), or \"unassigned\". due_date_range: \"overdue\" / \"today\" / \"this_week\" / \"next_week\" / \"YYYY-MM-DD..YYYY-MM-DD\". status and priority match case-insensitively against any select-property option label.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"properties": {
@@ -668,10 +673,10 @@ func (s *Server) toolSearchCards() toolEntry {
 			}
 			limit := args.Limit
 			if limit <= 0 {
-				limit = 50
+				limit = 200
 			}
-			if limit > 500 {
-				limit = 500
+			if limit > 1000 {
+				limit = 1000
 			}
 
 			// Determine which boards to search.
@@ -931,14 +936,19 @@ func parseDueDateRange(raw string) (int64, int64, error) {
 }
 
 func cardSummaryFor(card *model.Card, board *model.Board) cardSummary {
+	props := card.Properties
+	if props == nil {
+		props = map[string]interface{}{}
+	}
 	out := cardSummary{
 		ID:         card.ID,
 		BoardID:    card.BoardID,
 		BoardTitle: board.Title,
 		Title:      card.Title,
+		Assignees:  []string{}, // never nil — see cardSummary docstring
 		UpdateAt:   card.UpdateAt,
 		UpdateISO:  msToISO(card.UpdateAt),
-		Properties: card.Properties,
+		Properties: props,
 	}
 	if statusProp := findPropertyByName(board, "status"); statusProp != nil {
 		out.Status = resolveOptionLabel(card.Properties[statusProp.id()], statusProp)
