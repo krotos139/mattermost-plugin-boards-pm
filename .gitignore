@@ -56,3 +56,10 @@ server/**/*.coverage
 
 # notice
 .notice-work
+
+# Build artefacts produced by repack_plugin.py during local packaging.
+# The CI release flow drops them into ./dist (already ignored), but ad-hoc
+# builds end up in the repo root.
+boards-*.tar.gz
+mattermost-plugin-focalboard-*.tar.gz
+server.exe
