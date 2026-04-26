@@ -5,7 +5,7 @@
 import {Block, createBlock} from './block'
 import {FilterGroup, createFilterGroup} from './filterGroup'
 
-type IViewType = 'board' | 'table' | 'gallery' | 'calendar'
+type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt'
 type ISortOption = { propertyId: '__title' | string, reversed: boolean }
 
 type KanbanCalculationFields = {
@@ -17,6 +17,15 @@ type BoardViewFields = {
     viewType: IViewType
     groupById?: string
     dateDisplayPropertyId?: string
+    // Gantt view: id of the task/multiTask property that holds the
+    // dependency edges drawn between bars.
+    linkedByPropertyId?: string
+    // Gantt view: id of the number property whose value (0-100) is fed
+    // into frappe-gantt's per-bar progress fill.
+    progressPropertyId?: string
+    // Gantt view: id of a select property whose chosen option's color is
+    // applied to the corresponding bar.
+    colorPropertyId?: string
     sortOptions: ISortOption[]
     visiblePropertyIds: string[]
     visibleOptionIds: string[]
@@ -42,6 +51,9 @@ function createBoardView(block?: Block): BoardView {
             viewType: block?.fields.viewType || 'board',
             groupById: block?.fields.groupById,
             dateDisplayPropertyId: block?.fields.dateDisplayPropertyId,
+            linkedByPropertyId: block?.fields.linkedByPropertyId,
+            progressPropertyId: block?.fields.progressPropertyId,
+            colorPropertyId: block?.fields.colorPropertyId,
             sortOptions: block?.fields.sortOptions?.map((o: ISortOption) => ({...o})) || [],
             visiblePropertyIds: block?.fields.visiblePropertyIds?.slice() || [],
             visibleOptionIds: block?.fields.visibleOptionIds?.slice() || [],

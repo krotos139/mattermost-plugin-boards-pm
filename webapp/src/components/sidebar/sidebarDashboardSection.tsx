@@ -18,6 +18,7 @@ import BoardIcon from '../../widgets/icons/board'
 import TableIcon from '../../widgets/icons/table'
 import GalleryIcon from '../../widgets/icons/gallery'
 import CalendarIcon from '../../widgets/icons/calendar'
+import GanttIcon from '../../widgets/icons/gantt'
 
 // Reuse existing sidebar-item styles so the entry looks like a regular board.
 import './sidebarBoardItem.scss'
@@ -29,6 +30,7 @@ const iconForViewType = (viewType: IViewType): JSX.Element => {
     case 'table': return <TableIcon/>
     case 'gallery': return <GalleryIcon/>
     case 'calendar': return <CalendarIcon/>
+    case 'gantt': return <GanttIcon/>
     default: return <div/>
     }
 }

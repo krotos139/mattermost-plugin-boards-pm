@@ -57,7 +57,7 @@ class CsvExporter {
         const rows: string[][] = []
         const visibleProperties = board.cardProperties.filter((template: IPropertyTemplate) => viewToExport.fields.visiblePropertyIds.includes(template.id))
 
-        if (viewToExport.fields.viewType === 'calendar' &&
+        if ((viewToExport.fields.viewType === 'calendar' || viewToExport.fields.viewType === 'gantt') &&
             viewToExport.fields.dateDisplayPropertyId &&
             !viewToExport.fields.visiblePropertyIds.includes(viewToExport.fields.dateDisplayPropertyId)) {
             const dateDisplay = board.cardProperties.find((template: IPropertyTemplate) => viewToExport.fields.dateDisplayPropertyId === template.id)

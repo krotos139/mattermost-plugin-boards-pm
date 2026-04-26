@@ -39,6 +39,9 @@ import NewCardButton from './newCardButton'
 import ViewHeaderPropertiesMenu from './viewHeaderPropertiesMenu'
 import ViewHeaderGroupByMenu from './viewHeaderGroupByMenu'
 import ViewHeaderDisplayByMenu from './viewHeaderDisplayByMenu'
+import ViewHeaderLinkedByMenu from './viewHeaderLinkedByMenu'
+import ViewHeaderProgressByMenu from './viewHeaderProgressByMenu'
+import ViewHeaderColorByMenu from './viewHeaderColorByMenu'
 import ViewHeaderSortMenu from './viewHeaderSortMenu'
 import ViewHeaderActionsMenu from './viewHeaderActionsMenu'
 import ViewHeaderSearch from './viewHeaderSearch'
@@ -73,8 +76,26 @@ const ViewHeader = (props: Props) => {
     const isDashboard = Boolean((board.properties as Record<string, unknown> | undefined)?.dashboardKind)
 
     const withGroupBy = activeView.fields.viewType === 'board' || activeView.fields.viewType === 'table'
-    const withDisplayBy = activeView.fields.viewType === 'calendar'
-    const withSortBy = activeView.fields.viewType !== 'calendar'
+    const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt'
+    const withLinkedBy = activeView.fields.viewType === 'gantt'
+    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt'
+
+    // Gantt's "Linked by" lookup needs the resolved property template, not
+    // just the id, so the button can show a human label and the menu can
+    // render the current pick with a checkmark.
+    const linkedByProperty = withLinkedBy && activeView.fields.linkedByPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.linkedByPropertyId) :
+        undefined
+
+    // Same as linkedByProperty above — resolve here so the button label can
+    // show the property's human name.
+    const progressProperty = withLinkedBy && activeView.fields.progressPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.progressPropertyId) :
+        undefined
+
+    const colorProperty = withLinkedBy && activeView.fields.colorPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.colorPropertyId) :
+        undefined
 
     const [viewTitle, setViewTitle] = useState(activeView.title)
 
@@ -178,6 +199,27 @@ const ViewHeader = (props: Props) => {
                     properties={board.cardProperties}
                     activeView={activeView}
                     dateDisplayPropertyName={dateDisplayProperty?.name}
+                />}
+
+                {withLinkedBy &&
+                <ViewHeaderLinkedByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    linkedByPropertyName={linkedByProperty?.name}
+                />}
+
+                {withLinkedBy &&
+                <ViewHeaderProgressByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    progressPropertyName={progressProperty?.name}
+                />}
+
+                {withLinkedBy &&
+                <ViewHeaderColorByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    colorPropertyName={colorProperty?.name}
                 />}
 
                 {/* Filter */}

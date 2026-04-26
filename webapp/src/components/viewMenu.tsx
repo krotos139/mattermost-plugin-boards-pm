@@ -18,6 +18,7 @@ import CalendarIcon from '../widgets/icons/calendar'
 import DeleteIcon from '../widgets/icons/delete'
 import DuplicateIcon from '../widgets/icons/duplicate'
 import GalleryIcon from '../widgets/icons/gallery'
+import GanttIcon from '../widgets/icons/gantt'
 import TableIcon from '../widgets/icons/table'
 import Menu from '../widgets/menu'
 
@@ -211,6 +212,41 @@ const ViewMenu = (props: Props) => {
             })
     }, [props.board, props.activeView, props.intl, showView])
 
+    const handleAddViewGantt = useCallback(() => {
+        const {board, activeView, intl} = props
+
+        Utils.log('addview-gantt')
+
+        const view = createBoardView()
+        view.title = intl.formatMessage({id: 'View.NewGanttTitle', defaultMessage: 'Timeline view'})
+        view.fields.viewType = 'gantt'
+        view.parentId = board.id
+        view.boardId = board.id
+        view.fields.visiblePropertyIds = [Constants.titleColumnId]
+
+        const oldViewId = activeView.id
+
+        view.fields.dateDisplayPropertyId = board.cardProperties.find((o: IPropertyTemplate) => o.type === 'date')?.id
+        // Pre-pick the first task / multiTask property as the dependency
+        // source so a fresh Timeline view already has arrows drawn if the
+        // user has set up a relation field. They can switch via "Linked by".
+        view.fields.linkedByPropertyId = board.cardProperties.find((o: IPropertyTemplate) => o.type === 'task' || o.type === 'multiTask')?.id
+
+        mutator.insertBlock(
+            view.boardId,
+            view,
+            'add view',
+            async (block: Block) => {
+                setTimeout(() => {
+                    Utils.log(`showView: ${block.id}`)
+                    showView(block.id)
+                }, 120)
+            },
+            async () => {
+                showView(oldViewId)
+            })
+    }, [props.board, props.activeView, props.intl, showView])
+
     const {views, intl} = props
 
     const duplicateViewText = intl.formatMessage({
@@ -244,6 +280,7 @@ const ViewMenu = (props: Props) => {
         case 'table': return <TableIcon/>
         case 'gallery': return <GalleryIcon/>
         case 'calendar': return <CalendarIcon/>
+        case 'gantt': return <GanttIcon/>
         default: return <div/>
         }
     }
@@ -315,6 +352,12 @@ const ViewMenu = (props: Props) => {
                                 name='Calendar'
                                 icon={<CalendarIcon/>}
                                 onClick={handleAddViewCalendar}
+                            />
+                            <Menu.Text
+                                id='gantt'
+                                name={intl.formatMessage({id: 'View.Gantt', defaultMessage: 'Timeline'})}
+                                icon={<GanttIcon/>}
+                                onClick={handleAddViewGantt}
                             />
                         </div>
                     </Menu.SubMenu>

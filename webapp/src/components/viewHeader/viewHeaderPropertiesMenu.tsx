@@ -20,7 +20,7 @@ const ViewHeaderPropertiesMenu = (props: Props) => {
     const {properties, activeView} = props
     const intl = useIntl()
     const {viewType, visiblePropertyIds} = activeView.fields
-    const canShowBadges = viewType === 'board' || viewType === 'gallery' || viewType === 'calendar'
+    const canShowBadges = viewType === 'board' || viewType === 'gallery' || viewType === 'calendar' || viewType === 'gantt'
 
     const toggleVisibility = (propertyId: string) => {
         let newVisiblePropertyIds = []

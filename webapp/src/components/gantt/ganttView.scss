@@ -1,0 +1,230 @@
+.GanttContainer {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 24px;
+
+    &--empty {
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+        font-size: 13px;
+        padding: 24px;
+    }
+
+    &__layout {
+        display: flex;
+        align-items: stretch;
+        min-width: 0;
+        min-height: 0;
+        width: 100%;
+    }
+
+    &__chart {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 400px;
+        // Suppress text selection inside the chart — drag-to-reschedule
+        // would otherwise also select the bar's text label and any nearby
+        // header text, aborting the drag handlers. CSS alone doesn't cover
+        // Firefox SVG <text>; the selectstart listener in ganttView.tsx
+        // catches the rest.
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+
+        // Belt-and-braces: explicitly mark every text-bearing element
+        // inside the SVG so Firefox stops trying to select them.
+        text,
+        .gantt-container,
+        .gantt {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+    }
+
+    // Sidebar showing the visible-properties columns. Width is bounded so
+    // a board with many wide properties (multiPerson, etc.) doesn't push
+    // the chart out of view.
+    &__props {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        min-width: 200px;
+        max-width: 50%;
+        border-right: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
+        background: var(--g-header-background, rgb(var(--center-channel-bg-rgb)));
+    }
+
+    &__props-header {
+        display: flex;
+        align-items: flex-end;
+        border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
+        background: rgba(var(--center-channel-color-rgb), 0.04);
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+
+    // Wrapper clips the rows; inner is translated programmatically to
+    // mirror the chart's vertical scroll.
+    &__props-body {
+        flex: 1 1 auto;
+        position: relative;
+        overflow: hidden;
+    }
+
+    &__props-body-inner {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        will-change: transform;
+    }
+
+    &__props-row {
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.06);
+    }
+
+    &__props-cell {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 4px 8px;
+        font-size: 12px;
+        color: rgb(var(--center-channel-color-rgb));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        // Tame React property editors that try to take 100% width and add
+        // their own padding — keep cell content compact so rows match the
+        // 48px row height we share with frappe-gantt.
+        > * {
+            max-width: 100%;
+        }
+
+        &--header {
+            padding: 8px;
+            text-transform: none;
+        }
+    }
+
+    .frappe-gantt-popup {
+        font-size: 13px;
+    }
+
+    // Rich popup content shown on bar click. The wrapping `.popup-wrapper`
+    // (created by frappe-gantt) handles positioning + drop-shadow; we only
+    // style the inner content.
+    .GanttPopup {
+        font-size: 13px;
+        max-width: 320px;
+        min-width: 200px;
+
+        &__title {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 6px;
+            color: var(--g-text-dark, rgb(var(--center-channel-color-rgb)));
+            word-break: break-word;
+        }
+
+        &__rows {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            row-gap: 4px;
+            column-gap: 8px;
+        }
+
+        &__row {
+            display: contents;
+        }
+
+        &__label {
+            color: var(--g-text-muted, rgba(var(--center-channel-color-rgb), 0.65));
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        &__value {
+            color: var(--g-text-dark, rgb(var(--center-channel-color-rgb)));
+            font-size: 12px;
+            word-break: break-word;
+            min-width: 0;
+        }
+    }
+
+    // Bar colors driven by the "Color by" select-property option. Class
+    // names are joined with a single dash because frappe-gantt feeds
+    // `custom_class` straight into `classList.add()`, which throws on any
+    // whitespace inside the string. We only paint the bar fill; the
+    // progress overlay keeps frappe's default so contrast stays readable.
+    .gantt .bar-wrapper {
+        &[class*='gantt-bar-color-'] .bar {
+            stroke: rgba(0, 0, 0, 0.15);
+            stroke-width: 0.5;
+        }
+
+        // For each color: paint the bar with the prop color and the
+        // progress overlay with a darker shade of the same color so the
+        // progress fill stays legible without falling back to grey.
+        // `color-mix` is widely supported (Chromium 111+, Firefox 113+,
+        // Safari 16.2+); browsers that don't understand it just keep the
+        // default --g-progress-color.
+        &.gantt-bar-color-propColorDefault {
+            .bar { fill: var(--prop-default); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-default), black 25%); }
+        }
+        &.gantt-bar-color-propColorGray {
+            .bar { fill: var(--prop-gray); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-gray), black 30%); }
+        }
+        &.gantt-bar-color-propColorBrown {
+            .bar { fill: var(--prop-brown); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-brown), black 30%); }
+        }
+        &.gantt-bar-color-propColorOrange {
+            .bar { fill: var(--prop-orange); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-orange), black 30%); }
+        }
+        &.gantt-bar-color-propColorYellow {
+            .bar { fill: var(--prop-yellow); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-yellow), black 30%); }
+        }
+        &.gantt-bar-color-propColorGreen {
+            .bar { fill: var(--prop-green); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-green), black 30%); }
+        }
+        &.gantt-bar-color-propColorBlue {
+            .bar { fill: var(--prop-blue); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-blue), black 30%); }
+        }
+        &.gantt-bar-color-propColorPurple {
+            .bar { fill: var(--prop-purple); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-purple), black 30%); }
+        }
+        &.gantt-bar-color-propColorPink {
+            .bar { fill: var(--prop-pink); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-pink), black 30%); }
+        }
+        &.gantt-bar-color-propColorRed {
+            .bar { fill: var(--prop-red); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-red), black 30%); }
+        }
+    }
+
+    // Frappe-gantt sets its own light-theme colors; nudge a few so the chart
+    // sits well on Mattermost's surface color without overriding the lib's
+    // own theming wholesale.
+    .gantt .grid-header {
+        fill: rgba(var(--center-channel-color-rgb), 0.04);
+    }
+
+    .gantt .lower-text,
+    .gantt .upper-text {
+        fill: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+}

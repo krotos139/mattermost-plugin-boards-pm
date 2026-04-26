@@ -44,6 +44,18 @@ function updateAllBoardsAndBlocks(boards: Board[], blocks: Block[]) {
     })
 }
 
+// Build a BlockPatch payload that either sets or clears a single field.
+// JSON.stringify drops `undefined` values, so passing `{updatedFields:
+// {x: undefined}}` is a silent no-op on the wire — the field stays
+// whatever it was. To actually clear it, the patch needs `deletedFields:
+// ['x']`. Use this helper for "None"-style menu options.
+function patchOrDelete(field: string, value: string|undefined): BlockPatch {
+    if (value === undefined) {
+        return {deletedFields: [field]}
+    }
+    return {updatedFields: {[field]: value}}
+}
+
 //
 // The Mutator is used to make all changes to server state
 // It also ensures that the Undo-manager is called for each action
@@ -832,6 +844,45 @@ class Mutator {
                 await octoClient.patchBlock(boardId, viewId, {updatedFields: {dateDisplayPropertyId: oldDateDisplayPropertyId}})
             },
             'display by',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewLinkedByPropertyId(boardId: string, viewId: string, oldLinkedByPropertyId: string|undefined, linkedByPropertyId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('linkedByPropertyId', linkedByPropertyId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('linkedByPropertyId', oldLinkedByPropertyId))
+            },
+            'linked by',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewProgressPropertyId(boardId: string, viewId: string, oldProgressPropertyId: string|undefined, progressPropertyId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('progressPropertyId', progressPropertyId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('progressPropertyId', oldProgressPropertyId))
+            },
+            'progress by',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewColorPropertyId(boardId: string, viewId: string, oldColorPropertyId: string|undefined, colorPropertyId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('colorPropertyId', colorPropertyId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('colorPropertyId', oldColorPropertyId))
+            },
+            'color by',
             this.undoDisplayId,
         )
     }
