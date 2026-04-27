@@ -39,11 +39,22 @@ var ErrPluginNotAllowed = errors.New("boards plugin not allowed while Boards pro
 // Plugin implements the interface expected by the Mattermost server to communicate between the server and plugin processes.
 type Plugin struct {
 	plugin.MattermostPlugin
-	boardsApp *boards.BoardsApp
-	handoff   *handoff.Service
-	mcpServer *mcp.Server
-	mcpKeys   *mcp.KeyStore
-	mcpLogger mlog.LoggerIFace
+	boardsApp   *boards.BoardsApp
+	handoff     *handoff.Service
+	mcpServer   *mcp.Server
+	mcpKeys     *mcp.KeyStore
+	mcpLogger   mlog.LoggerIFace
+	appliedMCP  mcpAppliedConfig
+}
+
+// mcpAppliedConfig is the snapshot of MCP-related plugin settings that the
+// running listener was started with. reconcileMCP compares this against the
+// admin's current desired config to decide whether a restart is required.
+type mcpAppliedConfig struct {
+	enabled               bool
+	host                  string
+	port                  int
+	requireBearerLoopback bool
 }
 
 func (p *Plugin) OnActivate() error {
@@ -80,21 +91,24 @@ func (p *Plugin) OnActivate() error {
 		return err
 	}
 
-	p.maybeStartMCP()
+	p.reconcileMCP()
 	return nil
 }
 
-// maybeStartMCP constructs the MCP server when the admin has enabled it in
-// plugin settings, and starts the TCP listener on MCPListenAddress.
-//
-// Failures are logged and swallowed — MCP is optional and should not block
-// the rest of the plugin from coming up.
-func (p *Plugin) maybeStartMCP() {
-	mmcfg := p.MattermostPlugin.API.GetConfig()
-	settings := mmcfg.PluginSettings.Plugins[boards.PluginName]
-	enabled, _ := settings[mcpEnabledSetting].(bool)
-	if !enabled {
-		return
+// desiredMCPConfig reads the admin-facing plugin settings into the snapshot
+// shape used by reconcileMCP. Returns the zero value when MCP is disabled
+// or the server config is unavailable; reconcileMCP relies on `enabled` to
+// drive teardown.
+func (p *Plugin) desiredMCPConfig() mcpAppliedConfig {
+	out := mcpAppliedConfig{}
+	cfg := p.MattermostPlugin.API.GetConfig()
+	if cfg == nil {
+		return out
+	}
+	settings := cfg.PluginSettings.Plugins[boards.PluginName]
+	out.enabled, _ = settings[mcpEnabledSetting].(bool)
+	if !out.enabled {
+		return out
 	}
 
 	listenAddr := mcpDefaultListenAddr
@@ -109,16 +123,53 @@ func (p *Plugin) maybeStartMCP() {
 			mlog.String("input", listenAddr), mlog.Err(err))
 		host, port, _ = splitListenAddr(mcpDefaultListenAddr)
 	}
+	out.host = host
+	out.port = port
+	out.requireBearerLoopback, _ = settings[mcpRequireBearerLoopbackKey].(bool)
+	return out
+}
 
-	requireBearerLoopback, _ := settings[mcpRequireBearerLoopbackKey].(bool)
+// reconcileMCP brings the MCP listener into agreement with current plugin
+// settings. Idempotent: a no-op when desired matches the running snapshot.
+// Called from OnActivate (initial start) and OnConfigurationChange (admin
+// edits MCPListenAddress / EnableMCPServer / MCPRequireBearerOnLoopback in
+// the System Console — without this hook the user has to disable+enable the
+// plugin for changes to take effect).
+//
+// Failures are logged and swallowed — MCP is optional and should not block
+// the rest of the plugin from operating.
+func (p *Plugin) reconcileMCP() {
+	desired := p.desiredMCPConfig()
+
+	// Already in the desired state.
+	if p.mcpServer != nil && desired == p.appliedMCP {
+		return
+	}
+
+	// Tear down whatever's running before applying the new config. Stop is
+	// safe on a not-running server (handleMCP still serves until Stop, then
+	// returns ErrServerClosed which the goroutine swallows).
+	if p.mcpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := p.mcpServer.Stop(ctx); err != nil {
+			p.mcpLogger.Warn("mcp: stop returned error during reconcile", mlog.Err(err))
+		}
+		cancel()
+		p.mcpServer = nil
+		p.appliedMCP = mcpAppliedConfig{}
+	}
+
+	if !desired.enabled {
+		return
+	}
 
 	server := mcp.New(
 		mcp.Config{
-			BindAddress:             host,
-			Port:                    port,
+			BindAddress:             desired.host,
+			Port:                    desired.port,
 			ServerName:              "mattermost-boards",
 			ServerVersion:           manifest.Version,
-			RequireBearerOnLoopback: requireBearerLoopback,
+			RequireBearerOnLoopback: desired.requireBearerLoopback,
 		},
 		p.boardsApp.App(),
 		p.MattermostPlugin.API,
@@ -128,8 +179,9 @@ func (p *Plugin) maybeStartMCP() {
 	// Retain the server reference unconditionally so Plugin.ServeHTTP can
 	// dispatch /mcp requests delivered via the inter-plugin HTTP API.
 	p.mcpServer = server
+	p.appliedMCP = desired
 
-	if port > 0 {
+	if desired.port > 0 {
 		if err := server.Start(); err != nil {
 			p.mcpLogger.Warn("mcp: TCP listener failed to start; plugin transport remains available", mlog.Err(err))
 		}
@@ -445,7 +497,11 @@ func (p *Plugin) OnConfigurationChange() error {
 		return nil
 	}
 
-	return p.boardsApp.OnConfigurationChange()
+	if err := p.boardsApp.OnConfigurationChange(); err != nil {
+		return err
+	}
+	p.reconcileMCP()
+	return nil
 }
 
 func (p *Plugin) OnWebSocketConnect(webConnID, userID string) {
@@ -509,13 +565,24 @@ const (
 // the mobile-handoff bridge, /mcp by the MCP server (when enabled), and the
 // admin keys API by the keys table component (always available once the
 // plugin has activated). Everything else falls through to BoardsApp.
+//
+// /mcp is delivered through two distinct Mattermost code paths that look
+// identical at this layer (same URL.Path, same in-process call). To keep
+// the inter-plugin path's `X-Mattermost-UserID` trust from also applying
+// to external HTTP, we dispatch on `Mattermost-Plugin-ID`: Mattermost sets
+// that header on inter-plugin calls and explicitly strips it on external
+// requests, so its presence is unspoofable.
 func (p *Plugin) ServeHTTP(ctx *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	if p.handoff != nil && strings.HasPrefix(r.URL.Path, "/handoff/") {
 		p.handoff.ServeHTTP(w, r)
 		return
 	}
 	if p.mcpServer != nil && r.URL.Path == mcpPluginRoutePath {
-		p.mcpServer.ServeHTTP(w, r)
+		if strings.TrimSpace(r.Header.Get("Mattermost-Plugin-ID")) != "" {
+			p.mcpServer.ServeInterPlugin(w, r)
+		} else {
+			p.mcpServer.ServeExternalHTTP(w, r)
+		}
 		return
 	}
 	if p.mcpKeys != nil && strings.HasPrefix(r.URL.Path, mcpAdminKeysPathPrefix) {

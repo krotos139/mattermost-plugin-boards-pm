@@ -186,30 +186,68 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
+// mcpTransport identifies how a request reached the MCP server. The auth
+// rules differ for each because Mattermost's reverse proxy and inter-plugin
+// API mutate request headers in different ways — see authenticate.
+type mcpTransport int
+
+const (
+	// transportTCP — direct connection to the standalone MCP listener
+	// (cfg.BindAddress:Port). Headers are exactly what the client sent.
+	transportTCP mcpTransport = iota
+	// transportInterPlugin — request arrived through Mattermost's
+	// inter-plugin HTTP API (plugin://focalboard/mcp). Mattermost sets
+	// `Mattermost-Plugin-ID` and never strips it. The source plugin
+	// (e.g. mattermost-plugin-agents) is in-process so its
+	// `X-Mattermost-UserID` header is trustworthy.
+	transportInterPlugin
+	// transportExternalHTTP — request arrived through Mattermost's
+	// reverse proxy at /plugins/focalboard/mcp from the public network.
+	// MM strips Authorization, Mattermost-User-Id, and Mattermost-Plugin-ID
+	// before forwarding, then re-sets Mattermost-User-Id only for sessions
+	// it has authenticated. Crucially MM does NOT strip the X-prefixed
+	// X-Mattermost-UserID, which means an external attacker could forge it
+	// — so we must never trust that header on this transport.
+	transportExternalHTTP
+)
+
 // handleMCP is the entry point for the TCP listener. The auth path checks
 // remote-loopback-ness internally to decide whether X-Mattermost-UserID is
 // trusted.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	s.serveMCP(w, r, false)
+	s.serveMCP(w, r, transportTCP)
 }
 
-// ServeHTTP exposes the MCP JSON-RPC endpoint for invocation through the
-// plugin's own ServeHTTP, i.e. via Mattermost's inter-plugin HTTP API
-// (plugin://focalboard/mcp). Requests delivered this way are in-process and
-// untouchable by external network actors, so X-Mattermost-UserID is trusted
-// without further authentication (the Mattermost Agents plugin auto-injects
-// it on every call).
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.serveMCP(w, r, true)
+// ServeInterPlugin handles requests delivered via Mattermost's inter-plugin
+// HTTP API (plugin://focalboard/mcp). These are in-process and untouchable
+// by external network actors, so X-Mattermost-UserID is trusted without
+// further authentication (the Mattermost Agents plugin auto-injects it on
+// every call).
+//
+// Plugin.ServeHTTP MUST gate this method on `Mattermost-Plugin-ID` being
+// set — that header is the only signal that distinguishes inter-plugin from
+// external HTTP at this layer, and Mattermost guarantees it is unspoofable
+// (set by the server on inter-plugin, deleted on external).
+func (s *Server) ServeInterPlugin(w http.ResponseWriter, r *http.Request) {
+	s.serveMCP(w, r, transportInterPlugin)
 }
 
-func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, viaPluginTransport bool) {
+// ServeExternalHTTP handles requests that arrived via Mattermost's reverse
+// proxy at /plugins/focalboard/mcp. Despite the in-process delivery the
+// caller is on the public network, so we never trust X-Mattermost-UserID
+// (which MM does not strip) — only Mattermost-User-Id, which MM sets for
+// the duration of authenticated cookie/session-token requests.
+func (s *Server) ServeExternalHTTP(w http.ResponseWriter, r *http.Request) {
+	s.serveMCP(w, r, transportExternalHTTP)
+}
+
+func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, transport mcpTransport) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	userID, err := s.authenticate(r, viaPluginTransport)
+	userID, err := s.authenticate(r, transport)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
@@ -243,22 +281,31 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, viaPluginTrans
 // authenticate validates the request and returns the acting user's ID.
 // Decision matrix:
 //
-//	 transport         | bearer | X-MM-UserID | result
-//	-------------------+--------+-------------+--------------------------
-//	 plugin://         |   any  |    set      | trust X-MM-UserID
-//	 plugin://         |   any  |   empty     | accept bearer if valid api key, else 401
-//	 TCP loopback      | apikey |     —       | run as key owner
-//	 TCP loopback      | empty  |    set      | trust X-MM-UserID (unless RequireBearerOnLoopback)
-//	 TCP non-loopback  | apikey |     —       | run as key owner
-//	 TCP non-loopback  | empty  |     —       | 401 (header is never trusted off loopback)
+//	 transport         | bearer | X-MM-UserID | MM-User-Id | result
+//	-------------------+--------+-------------+------------+--------------------------
+//	 inter-plugin      |   any  |    set      |     —      | trust X-MM-UserID
+//	 inter-plugin      |   any  |   empty     |     —      | accept bearer if valid api key, else 401
+//	 external HTTP     |   —    |     —       |    set     | trust MM-User-Id (set by MM after session check)
+//	 external HTTP     |   —    |     —       |   empty    | 401 (X-MM-UserID is NEVER trusted here — MM doesn't strip it)
+//	 TCP loopback      | apikey |     —       |     —      | run as key owner
+//	 TCP loopback      | empty  |    set      |     —      | trust X-MM-UserID (unless RequireBearerOnLoopback)
+//	 TCP non-loopback  | apikey |     —       |     —      | run as key owner
+//	 TCP non-loopback  | empty  |     —       |     —      | 401 (header is never trusted off loopback)
 //
-// As a developer convenience for ad-hoc curl testing, a Bearer that doesn't
-// match any api key is also tried as a real Mattermost session token.
-func (s *Server) authenticate(r *http.Request, viaPluginTransport bool) (string, error) {
+// External HTTP cannot use Bearer because Mattermost's reverse proxy strips
+// the Authorization header before forwarding to plugins. External MCP
+// clients without a Mattermost cookie session must use the direct TCP
+// listener instead.
+//
+// As a developer convenience for ad-hoc curl testing on the TCP path, a
+// Bearer that doesn't match any api key is also tried as a real Mattermost
+// session token.
+func (s *Server) authenticate(r *http.Request, transport mcpTransport) (string, error) {
 	bearer := extractBearer(r)
 	userIDHeader := strings.TrimSpace(r.Header.Get("X-Mattermost-UserID"))
 
-	if viaPluginTransport {
+	switch transport {
+	case transportInterPlugin:
 		if userIDHeader != "" {
 			return userIDHeader, nil
 		}
@@ -266,28 +313,36 @@ func (s *Server) authenticate(r *http.Request, viaPluginTransport bool) (string,
 			return uid, nil
 		}
 		return "", errMissingPluginIdentity
-	}
 
-	// TCP path. Bearer wins over any header.
-	if bearer != "" {
-		if uid, ok := s.resolveBearer(bearer); ok {
-			return uid, nil
+	case transportExternalHTTP:
+		// Mattermost-User-Id is set by the Mattermost server only after a
+		// successful session check (cookie or query access_token). It is
+		// stripped from every external request before that check, so its
+		// presence here is authoritative.
+		if mmUserID := strings.TrimSpace(r.Header.Get("Mattermost-User-Id")); mmUserID != "" {
+			return mmUserID, nil
 		}
-		return "", errors.New("invalid api key (or expired session token)")
-	}
+		return "", errExternalUnauthenticated
 
-	if !isLoopback(r.RemoteAddr) {
-		return "", errMissingBearerRemote
+	default:
+		// transportTCP: bearer wins over any header.
+		if bearer != "" {
+			if uid, ok := s.resolveBearer(bearer); ok {
+				return uid, nil
+			}
+			return "", errors.New("invalid api key (or expired session token)")
+		}
+		if !isLoopback(r.RemoteAddr) {
+			return "", errMissingBearerRemote
+		}
+		if s.cfg.RequireBearerOnLoopback {
+			return "", errMissingBearerLoopback
+		}
+		if userIDHeader != "" {
+			return userIDHeader, nil
+		}
+		return "", errMissingIdentity
 	}
-
-	// Loopback, no bearer. Honour the hardening flag.
-	if s.cfg.RequireBearerOnLoopback {
-		return "", errMissingBearerLoopback
-	}
-	if userIDHeader != "" {
-		return userIDHeader, nil
-	}
-	return "", errMissingIdentity
 }
 
 // resolveBearer tries the value first as an issued MCP api key, then as a
@@ -321,10 +376,11 @@ func extractBearer(r *http.Request) string {
 // Sentinel auth errors. Distinct so the slash-command and curl test suite
 // can match them, and so logs aren't littered with stringly-typed errors.
 var (
-	errMissingPluginIdentity = errors.New("plugin transport request missing X-Mattermost-UserID and bearer")
-	errMissingBearerRemote   = errors.New("missing Authorization: Bearer <api-key>")
-	errMissingBearerLoopback = errors.New("missing Authorization: Bearer <api-key> (loopback bearer required)")
-	errMissingIdentity       = errors.New("missing X-Mattermost-UserID or Authorization: Bearer <api-key>")
+	errMissingPluginIdentity   = errors.New("plugin transport request missing X-Mattermost-UserID and bearer")
+	errMissingBearerRemote     = errors.New("missing Authorization: Bearer <api-key>")
+	errMissingBearerLoopback   = errors.New("missing Authorization: Bearer <api-key> (loopback bearer required)")
+	errMissingIdentity         = errors.New("missing X-Mattermost-UserID or Authorization: Bearer <api-key>")
+	errExternalUnauthenticated = errors.New("unauthenticated: external HTTP MCP requests need a Mattermost session cookie (use the direct TCP listener with Bearer api-key for non-cookie clients)")
 )
 
 // dispatch routes a parsed JSON-RPC request to the matching handler. Returns
