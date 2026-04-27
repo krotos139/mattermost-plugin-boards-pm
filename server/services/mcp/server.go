@@ -5,7 +5,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,8 +42,7 @@ type Backend interface {
 }
 
 // SessionAPI is the subset of plugin.API we need to validate bearer tokens,
-// enumerate the requesting user's teams, and resolve usernames for the
-// search_cards / create_card / update_card assigned_to argument.
+// enumerate teams, resolve usernames, and check sysadmin permissions.
 type SessionAPI interface {
 	GetSession(sessionID string) (*mm_model.Session, *mm_model.AppError)
 	GetTeamsForUser(userID string) ([]*mm_model.Team, *mm_model.AppError)
@@ -55,21 +53,28 @@ type SessionAPI interface {
 // Config controls how the MCP server is exposed. Zero value is invalid;
 // always construct via the plugin's OnActivate flow.
 type Config struct {
-	Port          int
+	// BindAddress is the IP the TCP listener binds to. Empty defaults to
+	// 127.0.0.1 (loopback only). Set to 0.0.0.0 to accept off-host
+	// connections — in that mode every TCP request must carry a per-user
+	// API key in `Authorization: Bearer ...`.
+	BindAddress string
+	Port        int
+
 	ServerName    string
 	ServerVersion string
-	// SharedSecret, if non-empty, is required as `Authorization: Bearer <s>`
-	// on every request. Combined with the auto-injected X-Mattermost-UserID
-	// header from the Mattermost Agents plugin, this lets the MCP server
-	// trust the caller's claimed user without doing per-call session lookups.
-	// Empty means "loopback-trust mode" — any local caller is accepted.
-	SharedSecret string
+
+	// RequireBearerOnLoopback hardens the loopback transport: when true,
+	// even local TCP callers must present a Bearer key. Default false (the
+	// Mattermost Agents plugin can hit 127.0.0.1 with X-Mattermost-UserID
+	// alone, since anything that can reach 127.0.0.1 already has shell
+	// access to the host).
+	RequireBearerOnLoopback bool
 }
 
-// Server is the loopback-only MCP HTTP server. Lifecycle:
+// Server is the MCP HTTP server. Lifecycle:
 //
 //	s := mcp.New(...)
-//	s.Start(ctx)         // begins accepting on 127.0.0.1:port
+//	s.Start()            // begins accepting on cfg.BindAddress:cfg.Port
 //	... plugin runs ...
 //	s.Stop(stopCtx)      // graceful drain
 //
@@ -79,6 +84,7 @@ type Server struct {
 	cfg     Config
 	backend Backend
 	api     SessionAPI
+	keys    *KeyStore
 	logger  mlog.LoggerIFace
 
 	mu       sync.Mutex
@@ -90,20 +96,27 @@ type Server struct {
 	orderedToolDefs []toolDef
 }
 
-func New(cfg Config, backend Backend, api SessionAPI, logger mlog.LoggerIFace) *Server {
+func New(cfg Config, backend Backend, api SessionAPI, keys *KeyStore, logger mlog.LoggerIFace) *Server {
 	s := &Server{
 		cfg:     cfg,
 		backend: backend,
 		api:     api,
+		keys:    keys,
 		logger:  logger,
 	}
 	s.tools = s.buildTools()
 	return s
 }
 
-// Start binds the loopback listener and starts serving in a goroutine.
-// Returns once the listener is bound (so a subsequent Agents config that
-// points at the URL will connect successfully).
+// Keys exposes the underlying key store so the plugin can wire CLI / admin
+// endpoints around the same instance.
+func (s *Server) Keys() *KeyStore {
+	return s.keys
+}
+
+// Start binds the TCP listener and starts serving in a goroutine. Returns
+// once the listener is bound (so a subsequent client config that points at
+// the URL will connect successfully).
 func (s *Server) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,7 +127,11 @@ func (s *Server) Start() error {
 		return fmt.Errorf("mcp: invalid port %d", s.cfg.Port)
 	}
 
-	addr := "127.0.0.1:" + strconv.Itoa(s.cfg.Port)
+	bind := strings.TrimSpace(s.cfg.BindAddress)
+	if bind == "" {
+		bind = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(bind, strconv.Itoa(s.cfg.Port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("mcp: listen on %s: %w", addr, err)
@@ -137,7 +154,10 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	s.logger.Info("mcp: server listening", mlog.String("addr", addr))
+	s.logger.Info("mcp: server listening",
+		mlog.String("addr", addr),
+		mlog.Bool("require_bearer_on_loopback", s.cfg.RequireBearerOnLoopback),
+	)
 	return nil
 }
 
@@ -166,41 +186,31 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// handleMCP serves the loopback HTTP listener path. It enforces a defence-
-// in-depth loopback check on r.RemoteAddr before delegating to the shared
-// request body. Use ServeHTTP for the plugin-transport entry point, which
-// skips the loopback check because Mattermost's PluginHTTP delivers the
-// request in-process (RemoteAddr is meaningless there).
+// handleMCP is the entry point for the TCP listener. The auth path checks
+// remote-loopback-ness internally to decide whether X-Mattermost-UserID is
+// trusted.
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	if !isLoopback(r.RemoteAddr) {
-		s.logger.Warn("mcp: rejecting non-loopback connection", mlog.String("remote", r.RemoteAddr))
-		http.Error(w, "loopback only", http.StatusForbidden)
-		return
-	}
-	s.serveMCP(w, r)
+	s.serveMCP(w, r, false)
 }
 
 // ServeHTTP exposes the MCP JSON-RPC endpoint for invocation through the
 // plugin's own ServeHTTP, i.e. via Mattermost's inter-plugin HTTP API
-// (plugin://focalboard/mcp). It performs the same authentication and
-// dispatch as the loopback listener but does not check RemoteAddr — a
-// PluginHTTP-delivered request is already trusted to originate inside the
-// Mattermost server process.
+// (plugin://focalboard/mcp). Requests delivered this way are in-process and
+// untouchable by external network actors, so X-Mattermost-UserID is trusted
+// without further authentication (the Mattermost Agents plugin auto-injects
+// it on every call).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.serveMCP(w, r)
+	s.serveMCP(w, r, true)
 }
 
-func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, viaPluginTransport bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	userID, err := s.authenticate(r)
+	userID, err := s.authenticate(r, viaPluginTransport)
 	if err != nil {
-		// Respond with HTTP 401 so the MCP client can react. The body is
-		// human-readable; structured JSON-RPC errors are reserved for cases
-		// where we successfully reached the dispatcher.
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -231,56 +241,91 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate validates the request and returns the acting user's ID.
+// Decision matrix:
 //
-// The Mattermost Agents plugin auto-injects `X-Mattermost-UserID: <id>` on
-// every MCP call (its config-time Headers field is static and admin-shared,
-// with no per-user templating). So we identify the caller from that header
-// and, if a shared secret is configured, gate the endpoint with a constant-
-// equality check on `Authorization: Bearer <secret>`.
+//	 transport         | bearer | X-MM-UserID | result
+//	-------------------+--------+-------------+--------------------------
+//	 plugin://         |   any  |    set      | trust X-MM-UserID
+//	 plugin://         |   any  |   empty     | accept bearer if valid api key, else 401
+//	 TCP loopback      | apikey |     —       | run as key owner
+//	 TCP loopback      | empty  |    set      | trust X-MM-UserID (unless RequireBearerOnLoopback)
+//	 TCP non-loopback  | apikey |     —       | run as key owner
+//	 TCP non-loopback  | empty  |     —       | 401 (header is never trusted off loopback)
 //
-// As a fallback for direct testing (curl, etc.) without X-Mattermost-UserID,
-// we still accept a real Mattermost session token in Authorization: Bearer.
-func (s *Server) authenticate(r *http.Request) (string, error) {
-	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+// As a developer convenience for ad-hoc curl testing, a Bearer that doesn't
+// match any api key is also tried as a real Mattermost session token.
+func (s *Server) authenticate(r *http.Request, viaPluginTransport bool) (string, error) {
+	bearer := extractBearer(r)
 	userIDHeader := strings.TrimSpace(r.Header.Get("X-Mattermost-UserID"))
 
-	const bearer = "Bearer "
-	var bearerValue string
-	if strings.HasPrefix(authHeader, bearer) {
-		bearerValue = strings.TrimSpace(authHeader[len(bearer):])
+	if viaPluginTransport {
+		if userIDHeader != "" {
+			return userIDHeader, nil
+		}
+		if uid, ok := s.resolveBearer(bearer); ok {
+			return uid, nil
+		}
+		return "", errMissingPluginIdentity
 	}
 
-	// Path A: Agents-plugin style. X-Mattermost-UserID identifies the user;
-	// the Bearer value (if any) is matched against the configured shared
-	// secret. Use subtle.ConstantTimeCompare to avoid leaking length/timing.
-	if userIDHeader != "" {
-		if s.cfg.SharedSecret != "" {
-			if bearerValue == "" {
-				return "", errors.New("missing Authorization: Bearer <shared-secret>")
-			}
-			a := []byte(bearerValue)
-			b := []byte(s.cfg.SharedSecret)
-			if len(a) != len(b) || subtle.ConstantTimeCompare(a, b) != 1 {
-				return "", errors.New("invalid shared secret")
-			}
+	// TCP path. Bearer wins over any header.
+	if bearer != "" {
+		if uid, ok := s.resolveBearer(bearer); ok {
+			return uid, nil
 		}
+		return "", errors.New("invalid api key (or expired session token)")
+	}
+
+	if !isLoopback(r.RemoteAddr) {
+		return "", errMissingBearerRemote
+	}
+
+	// Loopback, no bearer. Honour the hardening flag.
+	if s.cfg.RequireBearerOnLoopback {
+		return "", errMissingBearerLoopback
+	}
+	if userIDHeader != "" {
 		return userIDHeader, nil
 	}
-
-	// Path B: direct caller (no X-Mattermost-UserID). Treat Bearer as a real
-	// session token. Useful for ad-hoc curl testing and back-compat.
-	if bearerValue == "" {
-		return "", errors.New("missing X-Mattermost-UserID or Authorization: Bearer <session-token>")
-	}
-	session, appErr := s.api.GetSession(bearerValue)
-	if appErr != nil {
-		return "", fmt.Errorf("invalid session: %s", appErr.Message)
-	}
-	if session == nil || session.UserId == "" {
-		return "", errors.New("session has no user")
-	}
-	return session.UserId, nil
+	return "", errMissingIdentity
 }
+
+// resolveBearer tries the value first as an issued MCP api key, then as a
+// real Mattermost session token (curl-testing convenience). Returns
+// (userID, true) on success.
+func (s *Server) resolveBearer(bearer string) (string, bool) {
+	if bearer == "" {
+		return "", false
+	}
+	if s.keys != nil {
+		if uid, err := s.keys.LookupUserIDByPlaintext(bearer); err == nil {
+			return uid, true
+		}
+	}
+	session, appErr := s.api.GetSession(bearer)
+	if appErr == nil && session != nil && session.UserId != "" {
+		return session.UserId, true
+	}
+	return "", false
+}
+
+func extractBearer(r *http.Request) string {
+	const bearerPrefix = "Bearer "
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(auth, bearerPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(auth[len(bearerPrefix):])
+}
+
+// Sentinel auth errors. Distinct so the slash-command and curl test suite
+// can match them, and so logs aren't littered with stringly-typed errors.
+var (
+	errMissingPluginIdentity = errors.New("plugin transport request missing X-Mattermost-UserID and bearer")
+	errMissingBearerRemote   = errors.New("missing Authorization: Bearer <api-key>")
+	errMissingBearerLoopback = errors.New("missing Authorization: Bearer <api-key> (loopback bearer required)")
+	errMissingIdentity       = errors.New("missing X-Mattermost-UserID or Authorization: Bearer <api-key>")
+)
 
 // dispatch routes a parsed JSON-RPC request to the matching handler. Returns
 // (response, true) for notifications so the caller suppresses the body.

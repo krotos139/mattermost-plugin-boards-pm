@@ -51,6 +51,7 @@ import {PluginRegistry} from './types/mattermost-webapp'
 import './plugin.scss'
 import CloudUpgradeNudge from "./components/cloudUpgradeNudge/cloudUpgradeNudge"
 import CreateBoardFromTemplate from './components/createBoardFromTemplate'
+import McpKeysTable from './components/admin/mcpKeysTable'
 
 const windowAny = (window as SuiteWindow)
 windowAny.baseURL = process.env.TARGET_IS_PRODUCT ? '/plugins/boards' : '/plugins/focalboard'
@@ -374,6 +375,15 @@ export default class Plugin {
                     return {}
                 })
             }
+        }
+
+        // Admin console: read-only table of issued MCP API keys. The matching
+        // setting is declared as `"type": "custom"` with key `MCPKeysTable` in
+        // plugin.json, which is what registerAdminConsoleCustomSetting binds
+        // against (see Mattermost plugin reference). Older Mattermost server
+        // versions may not expose this method; guard with optional chaining.
+        if (this.registry.registerAdminConsoleCustomSetting) {
+            this.registry.registerAdminConsoleCustomSetting('MCPKeysTable', McpKeysTable, {showTitle: true})
         }
 
         this.boardSelectorId = this.registry.registerRootComponent((props: {webSocketClient: MMWebSocketClient}) => (
