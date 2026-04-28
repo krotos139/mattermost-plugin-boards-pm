@@ -27,11 +27,13 @@ import (
 type Backend interface {
 	GetBoardsForUserAndTeam(userID, teamID string, includePublicBoards bool) ([]*model.Board, error)
 	GetBoard(boardID string) (*model.Board, error)
+	CreateBoard(board *model.Board, userID string, addMember bool) (*model.Board, error)
 	GetCardsForBoard(boardID string, page, perPage int) ([]*model.Card, error)
 	GetCardByID(cardID string) (*model.Card, error)
 	CreateCard(card *model.Card, boardID, userID string, disableNotify bool) (*model.Card, error)
 	PatchCard(patch *model.CardPatch, cardID, userID string, disableNotify bool) (*model.Card, error)
 	HasPermissionToBoard(userID, boardID string, permission *mm_model.Permission) bool
+	HasPermissionToTeam(userID, teamID string, permission *mm_model.Permission) bool
 	GetMembersForUser(userID string) ([]*model.BoardMember, error)
 	GetMembersForBoard(boardID string) ([]*model.BoardMember, error)
 

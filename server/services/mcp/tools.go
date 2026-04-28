@@ -17,6 +17,7 @@ import (
 
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/utils"
+	mm_model "github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/shared/mlog"
 )
 
@@ -41,6 +42,7 @@ func (s *Server) buildTools() map[string]toolHandler {
 		s.toolGetCurrentUser(),
 		s.toolListMyBoards(),
 		s.toolGetBoardInfo(),
+		s.toolCreateBoard(),
 		s.toolListBoardMembers(),
 		s.toolSearchCards(),
 		s.toolGetCardDetails(),
@@ -359,6 +361,21 @@ func (s *Server) cardLinkFor(b *model.Board, cardID string) string {
 		return ""
 	}
 	rel := fmt.Sprintf("/boards/team/%s/%s/0/%s", b.TeamID, b.ID, cardID)
+	if base := s.siteURL(); base != "" {
+		return base + rel
+	}
+	return rel
+}
+
+// boardLinkFor builds the same kind of deep-link as cardLinkFor but stops
+// at the board level (no view / card path) — useful for create_board's
+// response and any future "open this board" surface. Mirrors the webapp's
+// /boards/team/:teamId/:boardId optional-segment route.
+func (s *Server) boardLinkFor(b *model.Board) string {
+	if b == nil || b.ID == "" {
+		return ""
+	}
+	rel := fmt.Sprintf("/boards/team/%s/%s", b.TeamID, b.ID)
 	if base := s.siteURL(); base != "" {
 		return base + rel
 	}
@@ -878,6 +895,128 @@ func (s *Server) boardMembersFor(boardID string) []boardMemberSummary {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
 	return out
+}
+
+// =====================================================================
+// create_board
+// =====================================================================
+
+// resolveBoardType normalises the agent-supplied type string onto Boards'
+// single-character storage code. Empty input picks "P" (private) — the
+// least-surprising default for a freshly-created project board, matching
+// what the webapp's "+ Add board" wizard does. Unknown input becomes a
+// validation error so a typo never silently produces an open board.
+func resolveBoardType(raw string) (model.BoardType, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "p", "private":
+		return model.BoardTypePrivate, nil
+	case "o", "open", "public":
+		return model.BoardTypeOpen, nil
+	}
+	return "", fmt.Errorf("type %q not in {private, open}", raw)
+}
+
+// resolveBoardRole maps the agent-supplied minimum_role to the matching
+// model.BoardRole. Empty (board has no minimum, scheme decides) is the
+// default. Unknown input is rejected to avoid silently dropping the field.
+func resolveBoardRole(raw string) (model.BoardRole, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return model.BoardRoleNone, nil
+	case "viewer":
+		return model.BoardRoleViewer, nil
+	case "commenter":
+		return model.BoardRoleCommenter, nil
+	case "editor":
+		return model.BoardRoleEditor, nil
+	case "admin":
+		return model.BoardRoleAdmin, nil
+	}
+	return "", fmt.Errorf("minimum_role %q not in {viewer, commenter, editor, admin}", raw)
+}
+
+func (s *Server) toolCreateBoard() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "create_board",
+			Description: "Creates a new Focalboard board on a team. team_id and title are required. type defaults to \"private\" (visible only to members the calling user invites later); pass \"open\" to make the board visible to anyone on the team — the calling user must have the matching create-channel permission on the team. The calling user is added as the board admin automatically. Returns the new board in the same shape list_my_boards() rows use, plus a deep-link URL when SiteURL is configured.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["team_id", "title"],
+				"properties": {
+					"team_id":          {"type": "string", "description": "Team to create the board in. Discover team_ids via list_my_boards() entries."},
+					"title":            {"type": "string", "description": "Board title."},
+					"type":             {"type": "string", "description": "\"private\" (default) or \"open\". Private boards are visible only to invited members; open boards are visible to everyone on the team."},
+					"description":      {"type": "string", "description": "Optional board description (markdown)."},
+					"icon":             {"type": "string", "description": "Optional single emoji for the board icon."},
+					"show_description": {"type": "boolean", "description": "Render the description on the board header. Default false."},
+					"minimum_role":     {"type": "string", "description": "Default role applied when a user joins the board: viewer / commenter / editor / admin. Empty inherits the team scheme."},
+					"channel_id":       {"type": "string", "description": "Optional Mattermost channel id to link the board to."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				TeamID          string `json:"team_id"`
+				Title           string `json:"title"`
+				Type            string `json:"type"`
+				Description     string `json:"description"`
+				Icon            string `json:"icon"`
+				ShowDescription bool   `json:"show_description"`
+				MinimumRole     string `json:"minimum_role"`
+				ChannelID       string `json:"channel_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.TeamID == "" || strings.TrimSpace(args.Title) == "" {
+				return toolError("team_id and non-empty title are required"), nil
+			}
+			boardType, err := resolveBoardType(args.Type)
+			if err != nil {
+				return toolError("%v", err), nil
+			}
+			minRole, err := resolveBoardRole(args.MinimumRole)
+			if err != nil {
+				return toolError("%v", err), nil
+			}
+
+			// Match the upstream API gate exactly — open boards need
+			// CreatePublicChannel on the team, private boards need
+			// CreatePrivateChannel. Reusing MM's channel perms keeps the
+			// MCP path consistent with whatever scheme an admin has
+			// configured for ordinary channel creation.
+			perm := mm_model.PermissionCreatePrivateChannel
+			if boardType == model.BoardTypeOpen {
+				perm = mm_model.PermissionCreatePublicChannel
+			}
+			if !s.backend.HasPermissionToTeam(userID, args.TeamID, perm) {
+				return toolError("permission denied: cannot create %s boards on team %s", boardTypeLabel(string(boardType)), args.TeamID), nil
+			}
+
+			board := &model.Board{
+				TeamID:          args.TeamID,
+				Title:           strings.TrimSpace(args.Title),
+				Description:     args.Description,
+				Icon:            args.Icon,
+				ShowDescription: args.ShowDescription,
+				Type:            boardType,
+				MinimumRole:     minRole,
+				ChannelID:       args.ChannelID,
+			}
+			created, err := s.backend.CreateBoard(board, userID, true)
+			if err != nil {
+				return toolError("create board: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":         true,
+				"board":      summarizeBoard(created),
+				"board_link": s.boardLinkFor(created),
+				"team_id":    created.TeamID,
+				"board_id":   created.ID,
+			})
+		},
+	}
 }
 
 // =====================================================================
