@@ -1030,12 +1030,12 @@ func (s *Server) toolSearchCards() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "search_cards",
-			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default every card on the matched board(s) is returned, including cards with no status / priority / due date / assignee set — those fields come back as JSON null and `assignees` is `[]`. Status and priority match fuzzily: case-insensitive, with leading numeric prefixes (\"1. \") and trailing emoji decoration stripped, so passing \"high\" matches an option labelled \"1. High 🔥\". Properties are returned resolved by name (e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}); pass include_raw_properties=true to also receive the raw id-keyed map. text_query is a case-insensitive substring match over the card title. Use the `cursor` returned in the response to paginate large result sets.",
+			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default every card on the matched board(s) is returned, including cards with no status / priority / due date / assignee set — those fields come back as JSON null and `assignees` is `[]`. Status and priority match fuzzily: case-insensitive, with leading numeric prefixes (\"1. \") and trailing emoji decoration stripped, so passing \"high\" matches an option labelled \"1. High 🔥\". Properties are returned resolved by name (e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}); pass include_raw_properties=true to also receive the raw id-keyed map. text_query is a case-insensitive substring match against the card title AND every text-bearing content block (description, comments, subtasks, checkboxes) — a hit anywhere is enough. Use the `cursor` returned in the response to paginate large result sets.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"properties": {
 					"board_id":               {"type": "string", "description": "Optional. Restrict to a single board; omit to search across every board the user can access."},
-					"text_query":             {"type": "string", "description": "Case-insensitive substring match over the card title."},
+					"text_query":             {"type": "string", "description": "Case-insensitive substring. Matches the card title and every text-bearing content block (description, comments, subtasks, checkboxes); a hit in any of these admits the card."},
 					"assigned_to":            {"type": "string", "description": "\"me\" (caller), a Mattermost username, \"any\" (matches any card with at least one assignee set), or \"unassigned\" (no assignees)."},
 					"status":                 {"type": "string", "description": "Status option label. Fuzzy: case-insensitive, leading \"1. \" / numeric prefix and emoji are ignored."},
 					"priority":               {"type": "string", "description": "Priority option label. Same fuzzy matching rules as status."},
@@ -1142,14 +1142,29 @@ func (s *Server) toolSearchCards() toolEntry {
 				if cerr != nil {
 					continue
 				}
+				// Decide whether the per-card block fetch is needed before the
+				// filter even runs (text_query scans block bodies, has_subtasks
+				// counts subtask blocks). When neither filter needs blocks we
+				// defer the fetch to the matched-card path so non-matching
+				// cards don't pay for it.
+				needBlocksForFilter := args.TextQuery != "" || args.HasSubtasks != nil
 				for _, card := range cards {
 					if len(matches) >= matchHardCap {
 						break
 					}
-					if !cardMatches(card, board, args, assigneeFilter, dueFrom, dueTo, s.backend) {
+					var blocks []*model.Block
+					blocksLoaded := false
+					if needBlocksForFilter {
+						blocks, _ = s.backend.GetBlocks(board.ID, card.ID, "")
+						blocksLoaded = true
+					}
+					if !cardMatches(card, board, args, assigneeFilter, dueFrom, dueTo, blocks) {
 						continue
 					}
-					matches = append(matches, s.cardSummaryFor(card, board, args.IncludeRawProperties))
+					if !blocksLoaded {
+						blocks, _ = s.backend.GetBlocks(board.ID, card.ID, "")
+					}
+					matches = append(matches, s.cardSummaryForWithBlocks(card, board, args.IncludeRawProperties, blocks))
 				}
 			}
 			sort.Slice(matches, func(i, j int) bool { return matches[i].UpdateAt > matches[j].UpdateAt })
@@ -1185,17 +1200,20 @@ func (s *Server) toolSearchCards() toolEntry {
 }
 
 // cardMatches evaluates every search filter against one card. Filters with
-// empty / zero values are skipped (i.e. "match anything").
+// empty / zero values are skipped (i.e. "match anything"). The caller passes
+// the card's pre-fetched content blocks (or nil); cardMatches uses them for
+// text body / has_subtasks filters but tolerates a nil slice when neither
+// filter is active.
 func cardMatches(
 	card *model.Card,
 	board *model.Board,
 	args searchCardsArgs,
 	assigneeFilter string,
 	dueFrom, dueTo int64,
-	backend Backend,
+	blocks []*model.Block,
 ) bool {
 	if args.TextQuery != "" {
-		if !strings.Contains(strings.ToLower(card.Title), strings.ToLower(args.TextQuery)) {
+		if !cardMatchesText(card, args.TextQuery, blocks) {
 			return false
 		}
 	}
@@ -1235,15 +1253,42 @@ func cardMatches(
 		}
 	}
 	if args.HasSubtasks != nil {
-		hasSub, err := cardHasSubtasks(card, board, backend)
-		if err != nil {
-			return false
+		hasSub := false
+		for _, b := range blocks {
+			if string(b.Type) == "subtask" {
+				hasSub = true
+				break
+			}
 		}
 		if hasSub != *args.HasSubtasks {
 			return false
 		}
 	}
 	return true
+}
+
+// cardMatchesText returns true when the query is a case-insensitive substring
+// of the card title or of any text-bearing content block (description text,
+// comments, subtasks, checkboxes). The body scan is what makes search_cards
+// useful for "find the card I wrote about X in a checkbox last week" — agents
+// no longer have to walk get_card_details across every result.
+func cardMatchesText(card *model.Card, query string, blocks []*model.Block) bool {
+	if query == "" {
+		return true
+	}
+	needle := strings.ToLower(query)
+	if strings.Contains(strings.ToLower(card.Title), needle) {
+		return true
+	}
+	for _, b := range blocks {
+		switch string(b.Type) {
+		case "text", "comment", "subtask", "checkbox":
+			if strings.Contains(strings.ToLower(b.Title), needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cardMatchesAssignee evaluates assigned_to. The filter argument can be
@@ -1307,17 +1352,6 @@ func cardMatchesSelect(card *model.Card, board *model.Board, propName, label str
 	}
 	rawID, _ := card.Properties[prop.id()].(string)
 	return rawID == targetID
-}
-
-// cardHasSubtasks checks whether the card has at least one persisted child
-// block of type=subtask. Boards stores each subtask as its own block parented
-// to the card.
-func cardHasSubtasks(card *model.Card, _ *model.Board, backend Backend) (bool, error) {
-	blocks, err := backend.GetBlocks(card.BoardID, card.ID, "subtask")
-	if err != nil {
-		return false, err
-	}
-	return len(blocks) > 0, nil
 }
 
 // parseDueDateRange returns [from, to] in unix-ms for the named window, or
@@ -1390,7 +1424,17 @@ func parseDueDateRange(raw string) (int64, int64, error) {
 //
 // Stale property ids that no longer match any board template are dropped from
 // the resolved map but preserved under properties_raw when includeRaw=true.
+//
+// cardSummaryFor fetches the card's content blocks itself to populate the
+// subtask / checkbox counters; cardSummaryForWithBlocks lets the caller
+// pass a pre-fetched block slice (used by search_cards which already has
+// to load them for text-body matching, so we don't double-fetch).
 func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw bool) cardSummary {
+	blocks, _ := s.backend.GetBlocks(card.BoardID, card.ID, "")
+	return s.cardSummaryForWithBlocks(card, board, includeRaw, blocks)
+}
+
+func (s *Server) cardSummaryForWithBlocks(card *model.Card, board *model.Board, includeRaw bool, blocks []*model.Block) cardSummary {
 	rawProps := card.Properties
 	if rawProps == nil {
 		rawProps = map[string]interface{}{}
@@ -1473,22 +1517,23 @@ func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw
 		ref := s.assigneeRefFor(card.ModifiedBy)
 		out.ModifiedBy = &ref
 	}
-	// Subtask + checkbox counts. One GetBlocks per card (filter by parent on
-	// the DB side). Lets the agent answer "show cards with open checkboxes"
-	// without N round-trips through get_card_details.
-	if blocks, err := s.backend.GetBlocks(card.BoardID, card.ID, ""); err == nil {
-		for _, b := range blocks {
-			switch string(b.Type) {
-			case "subtask":
-				out.SubtaskCount++
-				if v, ok := b.Fields["value"].(bool); ok && v {
-					out.SubtaskChecked++
-				}
-			case "checkbox":
-				out.CheckboxCount++
-				if v, ok := b.Fields["value"].(bool); ok && v {
-					out.CheckboxChecked++
-				}
+	// Subtask + checkbox counts. Caller passes the card's content blocks so
+	// search_cards reuses the same fetch it already did for text-body
+	// matching; single-card paths (create_card, update_card,
+	// get_card_details) load them via the cardSummaryFor wrapper. Lets the
+	// agent answer "show cards with open checkboxes" without N round-trips
+	// through get_card_details.
+	for _, b := range blocks {
+		switch string(b.Type) {
+		case "subtask":
+			out.SubtaskCount++
+			if v, ok := b.Fields["value"].(bool); ok && v {
+				out.SubtaskChecked++
+			}
+		case "checkbox":
+			out.CheckboxCount++
+			if v, ok := b.Fields["value"].(bool); ok && v {
+				out.CheckboxChecked++
 			}
 		}
 	}
