@@ -163,6 +163,7 @@ func (p *Plugin) reconcileMCP() {
 		return
 	}
 
+	pluginAPI := p.MattermostPlugin.API
 	server := mcp.New(
 		mcp.Config{
 			BindAddress:             desired.host,
@@ -170,9 +171,16 @@ func (p *Plugin) reconcileMCP() {
 			ServerName:              "mattermost-boards",
 			ServerVersion:           manifest.Version,
 			RequireBearerOnLoopback: desired.requireBearerLoopback,
+			SiteURLFn: func() string {
+				cfg := pluginAPI.GetConfig()
+				if cfg == nil || cfg.ServiceSettings.SiteURL == nil {
+					return ""
+				}
+				return *cfg.ServiceSettings.SiteURL
+			},
 		},
 		p.boardsApp.App(),
-		p.MattermostPlugin.API,
+		pluginAPI,
 		p.mcpKeys,
 		p.mcpLogger,
 	)

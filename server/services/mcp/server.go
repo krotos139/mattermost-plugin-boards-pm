@@ -73,6 +73,13 @@ type Config struct {
 	// alone, since anything that can reach 127.0.0.1 already has shell
 	// access to the host).
 	RequireBearerOnLoopback bool
+
+	// SiteURLFn returns the current Mattermost SiteURL (without trailing
+	// slash). Wired by the plugin from MM ServiceSettings.SiteURL so the MCP
+	// tools can emit absolute card_links the agent can hand straight to the
+	// user. Called per request — admin SiteURL changes take effect without a
+	// plugin restart. Returning empty produces relative links as before.
+	SiteURLFn func() string
 }
 
 // Server is the MCP HTTP server. Lifecycle:
@@ -116,6 +123,16 @@ func New(cfg Config, backend Backend, api SessionAPI, keys *KeyStore, logger mlo
 // endpoints around the same instance.
 func (s *Server) Keys() *KeyStore {
 	return s.keys
+}
+
+// siteURL returns the configured Mattermost SiteURL without a trailing slash,
+// or "" when SiteURLFn is unset / returns empty. cardLinkFor uses this to
+// prepend an absolute base to deep links.
+func (s *Server) siteURL() string {
+	if s.cfg.SiteURLFn == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(s.cfg.SiteURLFn()), "/")
 }
 
 // Start binds the TCP listener and starts serving in a goroutine. Returns

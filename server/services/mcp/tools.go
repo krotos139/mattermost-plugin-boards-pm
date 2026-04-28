@@ -48,9 +48,9 @@ func (s *Server) buildTools() map[string]toolHandler {
 		s.toolUpdateCard(),
 		s.toolBulkUpdateCards(),
 		s.toolDeleteCard(),
+		s.toolReorderCardContent(),
 		s.toolAddSubtask(),
 		s.toolUpdateSubtask(),
-		s.toolSetSubtaskStatus(),
 		s.toolDeleteSubtask(),
 		s.toolAddCheckbox(),
 		s.toolUpdateCheckbox(),
@@ -344,14 +344,48 @@ func msDateOnlyISO(ms int64) string {
 }
 
 // cardLinkFor builds a webapp deep link to a card. Format mirrors the URL the
-// frontend constructs in CardActionsMenu — caller (the agent) typically
-// concatenates this with the Mattermost base URL to give the user a clickable
-// link.
-func cardLinkFor(b *model.Board, cardID string) string {
+// frontend constructs in CardActionsMenu. When the plugin has a SiteURL
+// configured we prepend it so the agent can hand the user a clickable
+// absolute URL straight from chat; otherwise the relative path is returned
+// (which is still useful for in-product UI).
+//
+// canonicalOptionLabel strips the leading numeric prefix ("1. ") and any
+// trailing emoji / symbol decoration from a select-option label, but
+// preserves casing and inner whitespace. Use it for the *_canonical fields
+// in cardSummary so the agent can quote a clean human label without
+// re-doing the strip itself. Returns "" for empty input.
+func (s *Server) cardLinkFor(b *model.Board, cardID string) string {
 	if b == nil || cardID == "" {
 		return ""
 	}
-	return fmt.Sprintf("/boards/team/%s/%s/0/%s", b.TeamID, b.ID, cardID)
+	rel := fmt.Sprintf("/boards/team/%s/%s/0/%s", b.TeamID, b.ID, cardID)
+	if base := s.siteURL(); base != "" {
+		return base + rel
+	}
+	return rel
+}
+
+func canonicalOptionLabel(label string) string {
+	s := optionLabelPrefixRE.ReplaceAllString(strings.TrimSpace(label), "")
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevSpace = false
+		case unicode.IsSpace(r):
+			if !prevSpace {
+				b.WriteRune(' ')
+				prevSpace = true
+			}
+		case r == '-' || r == '_' || r == '/' || r == '.' || r == ',' || r == '(' || r == ')':
+			b.WriteRune(r)
+			prevSpace = false
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // propTemplate is a Boards card-property schema entry. The on-disk shape is
@@ -967,23 +1001,29 @@ type dateRange struct {
 // include_raw_properties=true on the tool call to also receive the raw
 // id-keyed map under properties_raw.
 type cardSummary struct {
-	ID            string                 `json:"id"`
-	BoardID       string                 `json:"board_id"`
-	BoardTitle    string                 `json:"board_title"`
-	Title         string                 `json:"title"`
-	Status        *string                `json:"status"`
-	Priority      *string                `json:"priority"`
-	Assignees     []assigneeRef          `json:"assignees"`
-	DueDate       *string                `json:"due_date"`
-	CardLink      string                 `json:"card_link"`
-	CreatedBy     *assigneeRef           `json:"created_by,omitempty"`
-	ModifiedBy    *assigneeRef           `json:"modified_by,omitempty"`
-	CreateAt      int64                  `json:"create_at,omitempty"`
-	CreateISO     string                 `json:"create_iso,omitempty"`
-	UpdateAt      int64                  `json:"update_at"`
-	UpdateISO     string                 `json:"update_iso"`
-	Properties    map[string]interface{} `json:"properties"`
-	PropertiesRaw map[string]interface{} `json:"properties_raw,omitempty"`
+	ID                string                 `json:"id"`
+	BoardID           string                 `json:"board_id"`
+	BoardTitle        string                 `json:"board_title"`
+	Title             string                 `json:"title"`
+	Status            *string                `json:"status"`
+	StatusCanonical   *string                `json:"status_canonical,omitempty"`
+	Priority          *string                `json:"priority"`
+	PriorityCanonical *string                `json:"priority_canonical,omitempty"`
+	Assignees         []assigneeRef          `json:"assignees"`
+	DueDate           *string                `json:"due_date"`
+	CardLink          string                 `json:"card_link"`
+	CreatedBy         *assigneeRef           `json:"created_by,omitempty"`
+	ModifiedBy        *assigneeRef           `json:"modified_by,omitempty"`
+	CreateAt          int64                  `json:"create_at,omitempty"`
+	CreateISO         string                 `json:"create_iso,omitempty"`
+	UpdateAt          int64                  `json:"update_at"`
+	UpdateISO         string                 `json:"update_iso"`
+	SubtaskCount      int                    `json:"subtask_count"`
+	SubtaskChecked    int                    `json:"subtask_checked"`
+	CheckboxCount     int                    `json:"checkbox_count"`
+	CheckboxChecked   int                    `json:"checkbox_checked"`
+	Properties        map[string]interface{} `json:"properties"`
+	PropertiesRaw     map[string]interface{} `json:"properties_raw,omitempty"`
 }
 
 func (s *Server) toolSearchCards() toolEntry {
@@ -1378,7 +1418,7 @@ func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw
 		BoardTitle: strings.TrimSpace(board.Title),
 		Title:      strings.TrimSpace(card.Title),
 		Assignees:  []assigneeRef{},
-		CardLink:   cardLinkFor(board, card.ID),
+		CardLink:   s.cardLinkFor(board, card.ID),
 		CreateAt:   card.CreateAt,
 		CreateISO:  msToISO(card.CreateAt),
 		UpdateAt:   card.UpdateAt,
@@ -1396,11 +1436,17 @@ func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw
 	if statusProp := findPropertyByName(board, "status"); statusProp != nil {
 		if label := resolveOptionLabel(rawProps[statusProp.id()], statusProp); label != "" {
 			out.Status = &label
+			if c := canonicalOptionLabel(label); c != "" && c != label {
+				out.StatusCanonical = &c
+			}
 		}
 	}
 	if priorityProp := findPropertyByName(board, "priority"); priorityProp != nil {
 		if label := resolveOptionLabel(rawProps[priorityProp.id()], priorityProp); label != "" {
 			out.Priority = &label
+			if c := canonicalOptionLabel(label); c != "" && c != label {
+				out.PriorityCanonical = &c
+			}
 		}
 	}
 	if due := findDueDateProperty(board); due != nil {
@@ -1426,6 +1472,25 @@ func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw
 	if card.ModifiedBy != "" && card.ModifiedBy != card.CreatedBy {
 		ref := s.assigneeRefFor(card.ModifiedBy)
 		out.ModifiedBy = &ref
+	}
+	// Subtask + checkbox counts. One GetBlocks per card (filter by parent on
+	// the DB side). Lets the agent answer "show cards with open checkboxes"
+	// without N round-trips through get_card_details.
+	if blocks, err := s.backend.GetBlocks(card.BoardID, card.ID, ""); err == nil {
+		for _, b := range blocks {
+			switch string(b.Type) {
+			case "subtask":
+				out.SubtaskCount++
+				if v, ok := b.Fields["value"].(bool); ok && v {
+					out.SubtaskChecked++
+				}
+			case "checkbox":
+				out.CheckboxCount++
+				if v, ok := b.Fields["value"].(bool); ok && v {
+					out.CheckboxChecked++
+				}
+			}
+		}
 	}
 	return out
 }
@@ -1515,13 +1580,18 @@ func (s *Server) assigneeRefFor(userID string) assigneeRef {
 // get_card_details
 // =====================================================================
 
+// cardDetail is the get_card_details response body. Comments / subtasks /
+// checkboxes / content_order are always emitted as arrays — empty as `[]`,
+// never omitted — so the agent can write `card.subtasks.length` without
+// guarding for a missing key. Description stays omitempty because empty
+// description is naturally absent from the agent's prose.
 type cardDetail struct {
 	cardSummary
 	Description  string         `json:"description,omitempty"`
-	Comments     []cardComment  `json:"comments,omitempty"`
-	Subtasks     []cardSubtask  `json:"subtasks,omitempty"`
-	Checkboxes   []cardCheckbox `json:"checkboxes,omitempty"`
-	ContentOrder []string       `json:"content_order,omitempty"`
+	Comments     []cardComment  `json:"comments"`
+	Subtasks     []cardSubtask  `json:"subtasks"`
+	Checkboxes   []cardCheckbox `json:"checkboxes"`
+	ContentOrder []string       `json:"content_order"`
 }
 
 // cardCheckbox is the resolved view of a Boards "checkbox" content block — a
@@ -1535,15 +1605,16 @@ type cardCheckbox struct {
 	CreateISO string `json:"create_iso,omitempty"`
 }
 
-// cardSubtask is the resolved view of a Boards "subtask" content block.
-// Boards stores the subtask state as fields.optionId, an option id of the
-// board's subtaskStatesPropertyId-pointed select property; we resolve it to a
-// human label when possible.
+// cardSubtask is the resolved view of a Boards "subtask" content block. The
+// done/not-done state lives at block.Fields["value"] as a bool — the same
+// shape checkbox blocks use. Earlier iterations of the API tried to expose
+// the optionId of a subtask-states select property, but no Focalboard board
+// actually configures that property, so the field was dead weight; the
+// `checked` boolean is the only state Focalboard's UI renders.
 type cardSubtask struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
-	Status    string `json:"status,omitempty"`
-	OptionID  string `json:"option_id,omitempty"`
+	Checked   bool   `json:"checked"`
 	CreateAt  int64  `json:"create_at,omitempty"`
 	CreateISO string `json:"create_iso,omitempty"`
 }
@@ -1561,7 +1632,7 @@ func (s *Server) toolGetCardDetails() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "get_card_details",
-			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, status), and metadata. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
+			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, checked), checkbox blocks (id, title, checked), and content_order. comments / subtasks / checkboxes / content_order always come back as arrays (possibly empty), never omitted. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id"],
@@ -1594,16 +1665,22 @@ func (s *Server) toolGetCardDetails() toolEntry {
 				return toolError("not found: parent board %s", card.BoardID), nil
 			}
 
+			contentOrder := card.ContentOrder
+			if contentOrder == nil {
+				contentOrder = []string{}
+			}
 			detail := cardDetail{
 				cardSummary:  s.cardSummaryFor(card, board, args.IncludeRawProperties),
-				ContentOrder: card.ContentOrder,
+				Comments:     []cardComment{},
+				Subtasks:     []cardSubtask{},
+				Checkboxes:   []cardCheckbox{},
+				ContentOrder: contentOrder,
 			}
 
 			// Pull all blocks parented to the card. Description is
-			// concatenated text content; comments and subtasks are
-			// surfaced separately. Subtask blocks are stored as type=subtask
-			// (singular) — the type plural would silently miss them.
-			subtaskStateProp := boardSubtaskStateProperty(board)
+			// concatenated text content; comments / subtasks / checkboxes
+			// are surfaced separately. Subtask blocks are stored as
+			// type=subtask (singular) — the plural would silently miss them.
 			contentBlocks, _ := s.backend.GetBlocks(card.BoardID, card.ID, "")
 			var descParts []string
 			for _, b := range contentBlocks {
@@ -1622,24 +1699,7 @@ func (s *Server) toolGetCardDetails() toolEntry {
 						CreateISO: msToISO(b.CreateAt),
 					})
 				case "subtask":
-					st := cardSubtask{
-						ID:        b.ID,
-						Title:     b.Title,
-						CreateAt:  b.CreateAt,
-						CreateISO: msToISO(b.CreateAt),
-					}
-					if optID, _ := b.Fields["optionId"].(string); optID != "" {
-						st.OptionID = optID
-						if subtaskStateProp != nil {
-							for _, opt := range subtaskStateProp.options() {
-								if optionID(opt) == optID {
-									st.Status = optionValue(opt)
-									break
-								}
-							}
-						}
-					}
-					detail.Subtasks = append(detail.Subtasks, st)
+					detail.Subtasks = append(detail.Subtasks, subtaskFromBlock(b))
 				case "checkbox":
 					detail.Checkboxes = append(detail.Checkboxes, checkboxFromBlock(b))
 				}
@@ -1651,25 +1711,6 @@ func (s *Server) toolGetCardDetails() toolEntry {
 			return toolJSON(detail)
 		},
 	}
-}
-
-// boardSubtaskStateProperty returns the select-property template used to label
-// subtask states on this board, or nil when the board has no
-// subtaskStatesPropertyId field configured.
-func boardSubtaskStateProperty(board *model.Board) propTemplate {
-	if board == nil || board.Properties == nil {
-		return nil
-	}
-	id, _ := board.Properties["subtaskStatesPropertyId"].(string)
-	if id == "" {
-		return nil
-	}
-	for _, p := range boardProperties(board) {
-		if p.id() == id {
-			return p
-		}
-	}
-	return nil
 }
 
 func (s *Server) usernameFor(userID string) string {
@@ -2054,15 +2095,22 @@ func (s *Server) toolAddComment() toolEntry {
 			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
 				return toolError("insert comment: %v", err), nil
 			}
+			// Re-read the persisted block so we return the real CreateAt the
+			// store assigned, not the zero value the in-memory block had
+			// before insert. add_subtask / add_checkbox use the same trick.
+			persisted, err := s.backend.GetBlockByID(block.ID)
+			if err != nil || persisted == nil {
+				persisted = block
+			}
 			out := map[string]interface{}{
 				"ok":         true,
-				"comment_id": block.ID,
+				"comment_id": persisted.ID,
 				"card_id":    card.ID,
-				"create_at":  block.CreateAt,
-				"create_iso": msToISO(block.CreateAt),
+				"create_at":  persisted.CreateAt,
+				"create_iso": msToISO(persisted.CreateAt),
 			}
 			if board != nil {
-				out["card_link"] = cardLinkFor(board, card.ID)
+				out["card_link"] = s.cardLinkFor(board, card.ID)
 			}
 			return toolJSON(out)
 		},
@@ -2247,112 +2295,202 @@ func (s *Server) toolDeleteCard() toolEntry {
 }
 
 // =====================================================================
-// add_subtask / update_subtask / set_subtask_status / delete_subtask
+// reorder_card_content
+// =====================================================================
+
+func (s *Server) toolReorderCardContent() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "reorder_card_content",
+			Description: "Replaces the card's content_order — the array that decides the rendered order of subtask / checkbox / text blocks in the card body. Pass ordered_ids as a permutation of the card's current child block ids; missing ids would silently disappear from the UI, so the call rejects partial lists. Use get_card_details() first to read the current ids and types. Returns {ok, card_id, content_order}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["card_id", "ordered_ids"],
+				"properties": {
+					"card_id":     {"type": "string", "description": "Card to reorder."},
+					"ordered_ids": {"type": "array", "items": {"type": "string"}, "description": "Block ids in the desired order. Must be a permutation of the card's existing child block ids."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CardID     string   `json:"card_id"`
+				OrderedIDs []string `json:"ordered_ids"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CardID == "" {
+				return toolError("card_id is required"), nil
+			}
+			card, err := s.backend.GetCardByID(args.CardID)
+			if err != nil || card == nil {
+				return toolError("not found: card %s", args.CardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
+			}
+			// Build the set of currently-attached child block ids (excludes
+			// stale ids that may still be in contentOrder from before the
+			// delete-cleanup fix). The new order must match this set
+			// exactly so a typo doesn't drop a real block from rendering.
+			children, err := s.backend.GetBlocks(card.BoardID, card.ID, "")
+			if err != nil {
+				return toolError("read child blocks: %v", err), nil
+			}
+			validIDs := make(map[string]bool, len(children))
+			for _, b := range children {
+				switch string(b.Type) {
+				case "subtask", "checkbox", "text", "image", "divider":
+					validIDs[b.ID] = true
+				}
+			}
+			seen := make(map[string]bool, len(args.OrderedIDs))
+			for _, id := range args.OrderedIDs {
+				if !validIDs[id] {
+					return toolError("ordered_ids contains %q which is not a child of card %s", id, args.CardID), nil
+				}
+				if seen[id] {
+					return toolError("ordered_ids contains duplicate %q", id), nil
+				}
+				seen[id] = true
+			}
+			if len(seen) != len(validIDs) {
+				var missing []string
+				for id := range validIDs {
+					if !seen[id] {
+						missing = append(missing, id)
+					}
+				}
+				sort.Strings(missing)
+				return toolError("ordered_ids is missing %d existing child block(s): %v — read get_card_details first to enumerate them", len(missing), missing), nil
+			}
+			newOrder := append([]string{}, args.OrderedIDs...)
+			patch := &model.CardPatch{ContentOrder: &newOrder}
+			updated, err := s.backend.PatchCard(patch, card.ID, userID, false)
+			if err != nil {
+				return toolError("reorder: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":            true,
+				"card_id":       updated.ID,
+				"content_order": updated.ContentOrder,
+			})
+		},
+	}
+}
+
+// =====================================================================
+// add_subtask / update_subtask / delete_subtask
 // =====================================================================
 //
 // Subtasks are stored as content blocks of type "subtask" parented to a card.
-// The text of the subtask lives in block.Title; the state lives in
-// block.Fields["optionId"], referencing an option of the board's
-// subtaskStatesPropertyId-pointed select property. Adding a subtask requires
-// appending its block id to the parent card's contentOrder so it surfaces in
-// the UI in the right position; deleting just deletes the block (the webapp
-// is tolerant of stale ids in contentOrder).
+// The text lives in block.Title; the done/not-done state lives at
+// block.Fields["value"] as a bool — the same shape Boards uses for the
+// checkbox content block. (Earlier API revisions tried to map the state
+// onto a board-level "subtask-states" select property via fields.optionId,
+// but no Focalboard board configures that property out of the box, so the
+// path was dead and the value never surfaced in the UI.) Adding a subtask
+// requires appending its id to the parent card's contentOrder so the
+// webapp renders it in the right position; deletion patches the same array
+// to remove the id (otherwise content_order accumulates dead ids over time).
 
-// resolveSubtaskStatus returns the option id that matches the given status
-// label on the board's subtask-state property. Empty input returns ("", nil)
-// — the caller treats that as "clear the state". When the property isn't
-// configured on the board, returns an error so the agent gets the configure-
-// the-board hint instead of silently saving an option-less subtask.
-func (s *Server) resolveSubtaskStatus(board *model.Board, label string) (string, error) {
-	if strings.TrimSpace(label) == "" {
-		return "", nil
-	}
-	prop := boardSubtaskStateProperty(board)
-	if prop == nil {
-		return "", fmt.Errorf("status %q rejected: board has no subtask-states property configured (set board.fields.subtaskStatesPropertyId via the UI)", label)
-	}
-	id := findOptionIDByLabel(prop, label)
-	if id == "" {
-		return "", fmt.Errorf("status %q not in {%s}", label, optionList(prop))
-	}
-	return id, nil
-}
-
-// subtaskFromBlock projects a stored subtask block into the same cardSubtask
-// shape that get_card_details returns, so create / update / status responses
-// match the read view.
-func (s *Server) subtaskFromBlock(block *model.Block, stateProp propTemplate) cardSubtask {
+// subtaskFromBlock projects a stored subtask block into the cardSubtask
+// shape used both by get_card_details (the read view) and by the create /
+// update / delete tool responses, so an agent never has to map between two
+// schemas.
+func subtaskFromBlock(block *model.Block) cardSubtask {
 	out := cardSubtask{
 		ID:        block.ID,
 		Title:     block.Title,
 		CreateAt:  block.CreateAt,
 		CreateISO: msToISO(block.CreateAt),
 	}
-	if optID, _ := block.Fields["optionId"].(string); optID != "" {
-		out.OptionID = optID
-		if stateProp != nil {
-			for _, opt := range stateProp.options() {
-				if optionID(opt) == optID {
-					out.Status = optionValue(opt)
-					break
-				}
-			}
-		}
+	if v, ok := block.Fields["value"].(bool); ok {
+		out.Checked = v
 	}
 	return out
 }
 
 // loadSubtask is the common preamble for the per-subtask edit tools: fetch
-// the block, verify it really is a subtask, load the parent card / board,
-// and check edit permission. Returns block, card, board on success. Errors
-// surface to the agent via the returned toolsCallResult — pass it through.
-func (s *Server) loadSubtask(userID, subtaskID string) (*model.Block, *model.Card, *model.Board, *toolsCallResult) {
+// the block, verify it really is a subtask, load the parent card, and
+// check edit permission. The board return is omitted because subtask
+// updates no longer consult board-level state. Errors surface to the agent
+// via the returned toolsCallResult — pass it through.
+func (s *Server) loadSubtask(userID, subtaskID string) (*model.Block, *model.Card, *toolsCallResult) {
 	block, err := s.backend.GetBlockByID(subtaskID)
 	if err != nil || block == nil {
 		r := toolError("not found: subtask %s", subtaskID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	if string(block.Type) != "subtask" {
 		r := toolError("not a subtask: block %s is %s", subtaskID, block.Type)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	card, err := s.backend.GetCardByID(block.ParentID)
 	if err != nil || card == nil {
 		r := toolError("not found: parent card %s", block.ParentID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
 		r := toolError("permission denied: cannot edit cards on board %s", card.BoardID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
-	board, err := s.backend.GetBoard(card.BoardID)
-	if err != nil || board == nil {
-		r := toolError("not found: parent board %s", card.BoardID)
-		return nil, nil, nil, &r
+	return block, card, nil
+}
+
+// removeFromContentOrder patches the parent card's ContentOrder to drop a
+// deleted block id. Without this, the card accumulates dangling ids in
+// content_order over time (the webapp tolerates them, but agents that
+// honour content_order chase ghosts). Best-effort — if the patch fails the
+// soft-delete is still applied and the error is logged but not surfaced
+// (the user-visible delete already succeeded).
+func (s *Server) removeFromContentOrder(card *model.Card, blockID, userID string) {
+	if card == nil || blockID == "" {
+		return
 	}
-	return block, card, board, nil
+	newOrder := make([]string, 0, len(card.ContentOrder))
+	found := false
+	for _, id := range card.ContentOrder {
+		if id == blockID {
+			found = true
+			continue
+		}
+		newOrder = append(newOrder, id)
+	}
+	if !found {
+		return
+	}
+	patch := &model.CardPatch{ContentOrder: &newOrder}
+	if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+		s.logger.Warn("mcp: contentOrder cleanup after block delete failed",
+			mlog.String("card_id", card.ID),
+			mlog.String("block_id", blockID),
+			mlog.Err(err),
+		)
+	}
 }
 
 func (s *Server) toolAddSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "add_subtask",
-			Description: "Appends a subtask to a card. title is required. status (optional) is the subtask-state label, fuzzy-matched against the board's configured subtask-states select property — pass an empty string or omit to leave the subtask unstated. Returns the created subtask in the same shape get_card_details() emits, plus card_link.",
+			Description: "Appends a subtask to a card. title is required. checked defaults to false. Subtasks render as their own row in the card body with a state toggle — semantically the same as a checkbox, but with a separate UI affordance for hierarchical work. Use add_checkbox for plain inline todos. Returns the created subtask in the same shape get_card_details() emits, plus card_link.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "title"],
 				"properties": {
 					"card_id": {"type": "string", "description": "Parent card id."},
 					"title":   {"type": "string", "description": "Subtask text."},
-					"status":  {"type": "string", "description": "Optional subtask-state label, fuzzy-matched. Empty or omitted leaves the state unset."}
+					"checked": {"type": "boolean", "description": "Initial done state. Default false."}
 				}
 			}`),
 		},
 		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
 			var args struct {
-				CardID string `json:"card_id"`
-				Title  string `json:"title"`
-				Status string `json:"status"`
+				CardID  string `json:"card_id"`
+				Title   string `json:"title"`
+				Checked bool   `json:"checked"`
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return toolError("invalid arguments: %v", err), nil
@@ -2372,18 +2510,13 @@ func (s *Server) toolAddSubtask() toolEntry {
 				return toolError("not found: parent board %s", card.BoardID), nil
 			}
 
-			optID, err := s.resolveSubtaskStatus(board, args.Status)
-			if err != nil {
-				return toolError("%v", err), nil
-			}
-
 			block := &model.Block{
 				ID:         utils.NewID(utils.IDTypeBlock),
 				BoardID:    card.BoardID,
 				ParentID:   card.ID,
 				Type:       "subtask",
 				Title:      strings.TrimSpace(args.Title),
-				Fields:     map[string]interface{}{"optionId": optID},
+				Fields:     map[string]interface{}{"value": args.Checked},
 				CreatedBy:  userID,
 				ModifiedBy: userID,
 			}
@@ -2410,9 +2543,9 @@ func (s *Server) toolAddSubtask() toolEntry {
 			}
 			return toolJSON(map[string]interface{}{
 				"ok":        true,
-				"subtask":   s.subtaskFromBlock(persisted, boardSubtaskStateProperty(board)),
+				"subtask":   subtaskFromBlock(persisted),
 				"card_id":   card.ID,
-				"card_link": cardLinkFor(board, card.ID),
+				"card_link": s.cardLinkFor(board, card.ID),
 			})
 		},
 	}
@@ -2422,27 +2555,27 @@ func (s *Server) toolUpdateSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "update_subtask",
-			Description: "Edits a subtask. Pass title to change the text and/or status to change the subtask-state label (fuzzy-matched). At least one of the two must be provided. Use set_subtask_status when you only need to flip the state — that tool is a focused alias. To clear the state pass status as an empty string.",
+			Description: "Edits a subtask. Pass title to change the text and/or checked to flip the done state. At least one of the two must be provided. Omit a field (don't pass the key) to leave it unchanged — passing checked=false explicitly clears the state, passing checked=true marks it done.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["subtask_id"],
 				"properties": {
 					"subtask_id": {"type": "string"},
 					"title":      {"type": "string", "description": "New subtask text. Omit to leave unchanged."},
-					"status":     {"type": "string", "description": "New subtask-state label, fuzzy-matched. Empty string clears the state. Omit (do not pass the key) to leave unchanged."}
+					"checked":    {"type": "boolean", "description": "New done state. Omit (do not pass the key) to leave unchanged."}
 				}
 			}`),
 		},
 		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
-			// Accept the keys explicitly so we can tell "status omitted" from
-			// "status: empty string" (clear) using a raw map.
+			// Distinguish "checked omitted" from "checked: false" by reading
+			// the raw JSON map directly.
 			var rawArgs map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &rawArgs); err != nil {
 				return toolError("invalid arguments: %v", err), nil
 			}
 			var subtaskID, title string
-			var newStatus string
-			titleSet, statusSet := false, false
+			var checked bool
+			titleSet, checkedSet := false, false
 			if v, ok := rawArgs["subtask_id"]; ok {
 				_ = json.Unmarshal(v, &subtaskID)
 			}
@@ -2450,18 +2583,18 @@ func (s *Server) toolUpdateSubtask() toolEntry {
 				_ = json.Unmarshal(v, &title)
 				titleSet = true
 			}
-			if v, ok := rawArgs["status"]; ok {
-				_ = json.Unmarshal(v, &newStatus)
-				statusSet = true
+			if v, ok := rawArgs["checked"]; ok {
+				_ = json.Unmarshal(v, &checked)
+				checkedSet = true
 			}
 			if subtaskID == "" {
 				return toolError("subtask_id is required"), nil
 			}
-			if !titleSet && !statusSet {
-				return toolError("at least one of title or status must be provided"), nil
+			if !titleSet && !checkedSet {
+				return toolError("at least one of title or checked must be provided"), nil
 			}
 
-			block, _, board, errResult := s.loadSubtask(userID, subtaskID)
+			block, _, errResult := s.loadSubtask(userID, subtaskID)
 			if errResult != nil {
 				return *errResult, nil
 			}
@@ -2471,12 +2604,8 @@ func (s *Server) toolUpdateSubtask() toolEntry {
 				trimmed := strings.TrimSpace(title)
 				patch.Title = &trimmed
 			}
-			if statusSet {
-				optID, err := s.resolveSubtaskStatus(board, newStatus)
-				if err != nil {
-					return toolError("%v", err), nil
-				}
-				patch.UpdatedFields = map[string]interface{}{"optionId": optID}
+			if checkedSet {
+				patch.UpdatedFields = map[string]interface{}{"value": checked}
 			}
 
 			updated, err := s.backend.PatchBlockAndNotify(subtaskID, patch, userID, false)
@@ -2488,71 +2617,7 @@ func (s *Server) toolUpdateSubtask() toolEntry {
 			}
 			return toolJSON(map[string]interface{}{
 				"ok":      true,
-				"subtask": s.subtaskFromBlock(updated, boardSubtaskStateProperty(board)),
-			})
-		},
-	}
-}
-
-func (s *Server) toolSetSubtaskStatus() toolEntry {
-	return toolEntry{
-		def: toolDef{
-			Name: "set_subtask_status",
-			Description: "Sets the state of a subtask. status is matched fuzzily against the board's configured subtask-states select property. Pass an empty string to clear the state. This is a thin alias over update_subtask for the common state-flip case.",
-			InputSchema: rawSchema(`{
-				"type": "object",
-				"required": ["subtask_id", "status"],
-				"properties": {
-					"subtask_id": {"type": "string"},
-					"status":     {"type": "string", "description": "Subtask-state label, fuzzy-matched. Empty string clears the state."}
-				}
-			}`),
-		},
-		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
-			// Accept "status" as either present (any value, including empty
-			// string) or missing. Empty-but-present means "clear"; missing
-			// is an arg error.
-			var rawArgs map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &rawArgs); err != nil {
-				return toolError("invalid arguments: %v", err), nil
-			}
-			var subtaskID, status string
-			if v, ok := rawArgs["subtask_id"]; ok {
-				_ = json.Unmarshal(v, &subtaskID)
-			}
-			statusRaw, statusSet := rawArgs["status"]
-			if statusSet {
-				_ = json.Unmarshal(statusRaw, &status)
-			}
-			if subtaskID == "" {
-				return toolError("subtask_id is required"), nil
-			}
-			if !statusSet {
-				return toolError("status is required (pass an empty string to clear)"), nil
-			}
-
-			block, _, board, errResult := s.loadSubtask(userID, subtaskID)
-			if errResult != nil {
-				return *errResult, nil
-			}
-
-			optID, err := s.resolveSubtaskStatus(board, status)
-			if err != nil {
-				return toolError("%v", err), nil
-			}
-			patch := &model.BlockPatch{
-				UpdatedFields: map[string]interface{}{"optionId": optID},
-			}
-			updated, err := s.backend.PatchBlockAndNotify(subtaskID, patch, userID, false)
-			if err != nil {
-				return toolError("set subtask status: %v", err), nil
-			}
-			if updated == nil {
-				updated = block
-			}
-			return toolJSON(map[string]interface{}{
-				"ok":      true,
-				"subtask": s.subtaskFromBlock(updated, boardSubtaskStateProperty(board)),
+				"subtask": subtaskFromBlock(updated),
 			})
 		},
 	}
@@ -2562,7 +2627,7 @@ func (s *Server) toolDeleteSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "delete_subtask",
-			Description: "Deletes a subtask block. Soft delete (DeleteAt is set on the underlying block). Requires manage-board-cards permission on the parent board. Returns {ok, subtask_id}.",
+			Description: "Deletes a subtask block. Soft delete (DeleteAt is set on the underlying block) and the id is removed from the parent card's content_order so it stops showing up in get_card_details(). Requires manage-board-cards permission on the parent board. Returns {ok, subtask_id}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["subtask_id"],
@@ -2581,13 +2646,14 @@ func (s *Server) toolDeleteSubtask() toolEntry {
 			if args.SubtaskID == "" {
 				return toolError("subtask_id is required"), nil
 			}
-			_, _, _, errResult := s.loadSubtask(userID, args.SubtaskID)
+			_, card, errResult := s.loadSubtask(userID, args.SubtaskID)
 			if errResult != nil {
 				return *errResult, nil
 			}
 			if err := s.backend.DeleteBlockAndNotify(args.SubtaskID, userID, false); err != nil {
 				return toolError("delete subtask: %v", err), nil
 			}
+			s.removeFromContentOrder(card, args.SubtaskID, userID)
 			return toolJSON(map[string]interface{}{
 				"ok":         true,
 				"subtask_id": args.SubtaskID,
@@ -2624,40 +2690,36 @@ func checkboxFromBlock(block *model.Block) cardCheckbox {
 }
 
 // loadCheckbox is the per-call preamble for the per-checkbox edit tools:
-// fetch the block, verify type, load card / board, check edit permission.
-// Returns block, card, board on success; error result on failure.
-func (s *Server) loadCheckbox(userID, checkboxID string) (*model.Block, *model.Card, *model.Board, *toolsCallResult) {
+// fetch the block, verify type, load the parent card, and check edit
+// permission. Board lookup is deferred to the call sites that actually need
+// it (currently only add_checkbox to render card_link).
+func (s *Server) loadCheckbox(userID, checkboxID string) (*model.Block, *model.Card, *toolsCallResult) {
 	block, err := s.backend.GetBlockByID(checkboxID)
 	if err != nil || block == nil {
 		r := toolError("not found: checkbox %s", checkboxID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	if string(block.Type) != "checkbox" {
 		r := toolError("not a checkbox: block %s is %s", checkboxID, block.Type)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	card, err := s.backend.GetCardByID(block.ParentID)
 	if err != nil || card == nil {
 		r := toolError("not found: parent card %s", block.ParentID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
 	if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
 		r := toolError("permission denied: cannot edit cards on board %s", card.BoardID)
-		return nil, nil, nil, &r
+		return nil, nil, &r
 	}
-	board, err := s.backend.GetBoard(card.BoardID)
-	if err != nil || board == nil {
-		r := toolError("not found: parent board %s", card.BoardID)
-		return nil, nil, nil, &r
-	}
-	return block, card, board, nil
+	return block, card, nil
 }
 
 func (s *Server) toolAddCheckbox() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "add_checkbox",
-			Description: "Appends a checkbox (inline todo) to a card. title is required. checked defaults to false. Use this for simple in-body checklists; use add_subtask when you need labelled states beyond done/not-done. Returns the created checkbox in the same shape get_card_details() emits, plus card_link.",
+			Description: "Appends a checkbox (inline todo) to a card. title is required. checked defaults to false. Checkboxes and subtasks have the same done/not-done state model (Fields.value=bool); pick whichever the user already uses elsewhere on their card — checkboxes for plain todo bullets, add_subtask for hierarchical work that benefits from a separate UI affordance. Returns the created checkbox in the same shape get_card_details() emits, plus card_link.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "title"],
@@ -2725,7 +2787,7 @@ func (s *Server) toolAddCheckbox() toolEntry {
 				"ok":        true,
 				"checkbox":  checkboxFromBlock(persisted),
 				"card_id":   card.ID,
-				"card_link": cardLinkFor(board, card.ID),
+				"card_link": s.cardLinkFor(board, card.ID),
 			})
 		},
 	}
@@ -2774,7 +2836,7 @@ func (s *Server) toolUpdateCheckbox() toolEntry {
 				return toolError("at least one of title or checked must be provided"), nil
 			}
 
-			block, _, _, errResult := s.loadCheckbox(userID, checkboxID)
+			block, _, errResult := s.loadCheckbox(userID, checkboxID)
 			if errResult != nil {
 				return *errResult, nil
 			}
@@ -2807,7 +2869,7 @@ func (s *Server) toolDeleteCheckbox() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "delete_checkbox",
-			Description: "Deletes a checkbox content block. Soft delete (DeleteAt is set on the underlying block). Requires manage-board-cards permission on the parent board. Returns {ok, checkbox_id}.",
+			Description: "Deletes a checkbox content block. Soft delete (DeleteAt is set on the underlying block) and the id is removed from the parent card's content_order so it stops showing up in get_card_details(). Requires manage-board-cards permission on the parent board. Returns {ok, checkbox_id}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["checkbox_id"],
@@ -2826,16 +2888,17 @@ func (s *Server) toolDeleteCheckbox() toolEntry {
 			if args.CheckboxID == "" {
 				return toolError("checkbox_id is required"), nil
 			}
-			_, _, _, errResult := s.loadCheckbox(userID, args.CheckboxID)
+			_, card, errResult := s.loadCheckbox(userID, args.CheckboxID)
 			if errResult != nil {
 				return *errResult, nil
 			}
 			if err := s.backend.DeleteBlockAndNotify(args.CheckboxID, userID, false); err != nil {
 				return toolError("delete checkbox: %v", err), nil
 			}
+			s.removeFromContentOrder(card, args.CheckboxID, userID)
 			return toolJSON(map[string]interface{}{
-				"ok":           true,
-				"checkbox_id":  args.CheckboxID,
+				"ok":          true,
+				"checkbox_id": args.CheckboxID,
 			})
 		},
 	}
@@ -2860,37 +2923,51 @@ func (s *Server) toolUpdateComment() toolEntry {
 			}`),
 		},
 		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
-			var args struct {
-				CommentID string `json:"comment_id"`
-				Text      string `json:"text"`
-			}
-			if err := json.Unmarshal(raw, &args); err != nil {
+			// Distinguish "text omitted" from "text: """ so the empty-string
+			// case can return a more helpful "use delete_comment" message
+			// instead of the generic "non-empty text required".
+			var rawArgs map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &rawArgs); err != nil {
 				return toolError("invalid arguments: %v", err), nil
 			}
-			if args.CommentID == "" || strings.TrimSpace(args.Text) == "" {
-				return toolError("comment_id and non-empty text are required"), nil
+			var commentID, text string
+			if v, ok := rawArgs["comment_id"]; ok {
+				_ = json.Unmarshal(v, &commentID)
 			}
-			block, err := s.backend.GetBlockByID(args.CommentID)
+			textRaw, textSet := rawArgs["text"]
+			if textSet {
+				_ = json.Unmarshal(textRaw, &text)
+			}
+			if commentID == "" {
+				return toolError("comment_id is required"), nil
+			}
+			if !textSet {
+				return toolError("text is required"), nil
+			}
+			if strings.TrimSpace(text) == "" {
+				return toolError("text cannot be empty — to remove a comment use delete_comment"), nil
+			}
+			block, err := s.backend.GetBlockByID(commentID)
 			if err != nil || block == nil {
-				return toolError("not found: comment %s", args.CommentID), nil
+				return toolError("not found: comment %s", commentID), nil
 			}
 			if string(block.Type) != "comment" {
-				return toolError("not a comment: block %s is %s", args.CommentID, block.Type), nil
+				return toolError("not a comment: block %s is %s", commentID, block.Type), nil
 			}
 			if block.CreatedBy != userID {
-				return toolError("permission denied: comment %s belongs to a different user", args.CommentID), nil
+				return toolError("permission denied: comment %s belongs to a different user", commentID), nil
 			}
 			if !s.backend.HasPermissionToBoard(userID, block.BoardID, model.PermissionCommentBoardCards) {
 				return toolError("permission denied: cannot comment on board %s", block.BoardID), nil
 			}
-			patch := &model.BlockPatch{Title: &args.Text}
-			if _, err := s.backend.PatchBlockAndNotify(args.CommentID, patch, userID, false); err != nil {
+			patch := &model.BlockPatch{Title: &text}
+			if _, err := s.backend.PatchBlockAndNotify(commentID, patch, userID, false); err != nil {
 				return toolError("update comment: %v", err), nil
 			}
 			return toolJSON(map[string]interface{}{
 				"ok":         true,
-				"comment_id": args.CommentID,
-				"text":       args.Text,
+				"comment_id": commentID,
+				"text":       text,
 			})
 		},
 	}
