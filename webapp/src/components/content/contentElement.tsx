@@ -15,6 +15,7 @@ import {contentRegistry} from './contentRegistry'
 // TODO: Update webpack to avoid this
 import './textElement'
 import './imageElement'
+import './videoElement'
 import './dividerElement'
 import './checkboxElement'
 import './subtaskElement'

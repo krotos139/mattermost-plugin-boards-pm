@@ -4,11 +4,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -60,6 +63,9 @@ func (s *Server) buildTools() map[string]toolHandler {
 		s.toolAddComment(),
 		s.toolUpdateComment(),
 		s.toolDeleteComment(),
+		s.toolGetAttachment(),
+		s.toolAttachFile(),
+		s.toolDeleteAttachment(),
 	}
 	out := make(map[string]toolHandler, len(entries))
 	for _, e := range entries {
@@ -1161,6 +1167,7 @@ type cardSummary struct {
 	SubtaskChecked    int                    `json:"subtask_checked"`
 	CheckboxCount     int                    `json:"checkbox_count"`
 	CheckboxChecked   int                    `json:"checkbox_checked"`
+	AttachmentCount   int                    `json:"attachment_count"`
 	Properties        map[string]interface{} `json:"properties"`
 	PropertiesRaw     map[string]interface{} `json:"properties_raw,omitempty"`
 }
@@ -1174,7 +1181,7 @@ func (s *Server) toolSearchCards() toolEntry {
 				"type": "object",
 				"properties": {
 					"board_id":               {"type": "string", "description": "Optional. Restrict to a single board; omit to search across every board the user can access."},
-					"text_query":             {"type": "string", "description": "Case-insensitive substring. Matches the card title and every text-bearing content block (description, comments, subtasks, checkboxes); a hit in any of these admits the card."},
+					"text_query":             {"type": "string", "description": "Case-insensitive substring. Matches the card title, every text-bearing content block (description, comments, subtasks, checkboxes), and attachment / image / video filenames; a hit in any of these admits the card. (File contents themselves are not searched.)"},
 					"assigned_to":            {"type": "string", "description": "\"me\" (caller), a Mattermost username, \"any\" (matches any card with at least one assignee set), or \"unassigned\" (no assignees)."},
 					"status":                 {"type": "string", "description": "Status option label. Fuzzy: case-insensitive, leading \"1. \" / numeric prefix and emoji are ignored."},
 					"priority":               {"type": "string", "description": "Priority option label. Same fuzzy matching rules as status."},
@@ -1422,6 +1429,13 @@ func cardMatchesText(card *model.Card, query string, blocks []*model.Block) bool
 	for _, b := range blocks {
 		switch string(b.Type) {
 		case "text", "comment", "subtask", "checkbox":
+			if strings.Contains(strings.ToLower(b.Title), needle) {
+				return true
+			}
+		case "image", "video", "attachment":
+			// Attachment titles are filenames the user/agent gave at
+			// upload time. We match against those so "find the card with
+			// crash.log attached" works without indexing file contents.
 			if strings.Contains(strings.ToLower(b.Title), needle) {
 				return true
 			}
@@ -1674,6 +1688,8 @@ func (s *Server) cardSummaryForWithBlocks(card *model.Card, board *model.Board, 
 			if v, ok := b.Fields["value"].(bool); ok && v {
 				out.CheckboxChecked++
 			}
+		case "image", "video", "attachment":
+			out.AttachmentCount++
 		}
 	}
 	return out
@@ -1771,11 +1787,12 @@ func (s *Server) assigneeRefFor(userID string) assigneeRef {
 // description is naturally absent from the agent's prose.
 type cardDetail struct {
 	cardSummary
-	Description  string         `json:"description,omitempty"`
-	Comments     []cardComment  `json:"comments"`
-	Subtasks     []cardSubtask  `json:"subtasks"`
-	Checkboxes   []cardCheckbox `json:"checkboxes"`
-	ContentOrder []string       `json:"content_order"`
+	Description  string           `json:"description,omitempty"`
+	Comments     []cardComment    `json:"comments"`
+	Subtasks     []cardSubtask    `json:"subtasks"`
+	Checkboxes   []cardCheckbox   `json:"checkboxes"`
+	Attachments  []cardAttachment `json:"attachments"`
+	ContentOrder []string         `json:"content_order"`
 }
 
 // cardCheckbox is the resolved view of a Boards "checkbox" content block — a
@@ -1816,7 +1833,7 @@ func (s *Server) toolGetCardDetails() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "get_card_details",
-			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, checked), checkbox blocks (id, title, checked), and content_order. comments / subtasks / checkboxes / content_order always come back as arrays (possibly empty), never omitted. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
+			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, checked), checkbox blocks (id, title, checked), attachments (image / video / generic file metadata — same shape as list_attachments), and content_order. comments / subtasks / checkboxes / attachments / content_order always come back as arrays (possibly empty), never omitted. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id"],
@@ -1858,15 +1875,22 @@ func (s *Server) toolGetCardDetails() toolEntry {
 				Comments:     []cardComment{},
 				Subtasks:     []cardSubtask{},
 				Checkboxes:   []cardCheckbox{},
+				Attachments:  []cardAttachment{},
 				ContentOrder: contentOrder,
 			}
 
 			// Pull all blocks parented to the card. Description is
-			// concatenated text content; comments / subtasks / checkboxes
-			// are surfaced separately. Subtask blocks are stored as
-			// type=subtask (singular) — the plural would silently miss them.
+			// concatenated text content; comments / subtasks / checkboxes /
+			// attachments are surfaced separately. Subtask blocks are
+			// stored as type=subtask (singular) — the plural would silently
+			// miss them.
 			contentBlocks, _ := s.backend.GetBlocks(card.BoardID, card.ID, "")
 			var descParts []string
+			type attachPair struct {
+				block *model.Block
+				info  *mm_model.FileInfo
+			}
+			attachPairs := make([]attachPair, 0)
 			for _, b := range contentBlocks {
 				switch string(b.Type) {
 				case "text":
@@ -1886,12 +1910,45 @@ func (s *Server) toolGetCardDetails() toolEntry {
 					detail.Subtasks = append(detail.Subtasks, subtaskFromBlock(b))
 				case "checkbox":
 					detail.Checkboxes = append(detail.Checkboxes, checkboxFromBlock(b))
+				case "image", "video", "attachment":
+					if fileIDFromBlock(b) == "" {
+						continue
+					}
+					info, infoErr := s.backend.GetFileInfo(fileIDFromBlock(b))
+					if infoErr != nil {
+						info = nil
+					}
+					attachPairs = append(attachPairs, attachPair{block: b, info: info})
 				}
 			}
 			detail.Description = strings.Join(descParts, "\n\n")
 			sort.Slice(detail.Comments, func(i, j int) bool {
 				return detail.Comments[i].CreateAt < detail.Comments[j].CreateAt
 			})
+			// Order attachments: image/video by content_order position
+			// (matches what the user sees in the card body), plain
+			// attachments by CreateAt afterwards.
+			orderIdx := make(map[string]int, len(card.ContentOrder))
+			for i, id := range card.ContentOrder {
+				orderIdx[id] = i
+			}
+			sort.SliceStable(attachPairs, func(i, j int) bool {
+				ii, iIn := orderIdx[attachPairs[i].block.ID]
+				jj, jIn := orderIdx[attachPairs[j].block.ID]
+				switch {
+				case iIn && jIn:
+					return ii < jj
+				case iIn:
+					return true
+				case jIn:
+					return false
+				default:
+					return attachPairs[i].block.CreateAt < attachPairs[j].block.CreateAt
+				}
+			})
+			for _, p := range attachPairs {
+				detail.Attachments = append(detail.Attachments, s.attachmentFromBlock(p.block, board, p.info))
+			}
 			return toolJSON(detail)
 		},
 	}
@@ -3199,6 +3256,525 @@ func (s *Server) toolDeleteComment() toolEntry {
 			return toolJSON(map[string]interface{}{
 				"ok":         true,
 				"comment_id": args.CommentID,
+			})
+		},
+	}
+}
+
+// =====================================================================
+// get_attachment / attach_file / delete_attachment
+// =====================================================================
+//
+// Attachments are content blocks of type "image" or "attachment" parented to
+// a card. Both kinds reference an uploaded file via Fields["fileId"] (the
+// historical "attachmentId" alias is also tolerated on read). Inserting an
+// attachment also requires appending its block id to the parent card's
+// content_order so the webapp renders it; delete_attachment relies on the
+// app-level orphan cleanup hook in DeleteBlockAndNotify to actually remove
+// the on-disk file.
+
+// Hard ceiling on inline body returned by get_attachment. Even if the agent
+// passes a larger max_bytes, we cap the response payload here so the MCP
+// channel cannot be flooded with a single 100 MB read.
+const attachmentInlineHardCap = 50 * 1024 * 1024
+
+const attachmentInlineDefault = 5 * 1024 * 1024
+
+// cardAttachment is the resolved view of one attachment / image / video
+// content block. is_image / is_video / is_audio are derived from MIME so
+// the agent can decide between dereferencing url and inlining via
+// get_attachment. mime is always populated — falls back to
+// "application/octet-stream" when the upstream file info has no MIME (e.g.,
+// the filename had no recognisable extension).
+type cardAttachment struct {
+	ID          string        `json:"id"`
+	CardID      string        `json:"card_id"`
+	BoardID     string        `json:"board_id"`
+	Kind        string        `json:"kind"`
+	FileID      string        `json:"file_id"`
+	Filename    string        `json:"filename"`
+	Mime        string        `json:"mime"`
+	SizeBytes   int64         `json:"size_bytes"`
+	IsImage     bool          `json:"is_image"`
+	IsVideo     bool          `json:"is_video"`
+	IsAudio     bool          `json:"is_audio"`
+	UploadedBy  *assigneeRef  `json:"uploaded_by,omitempty"`
+	UploadedAt  int64         `json:"uploaded_at,omitempty"`
+	UploadedISO string        `json:"uploaded_iso,omitempty"`
+	URL         string        `json:"url"`
+}
+
+// fileIDFromBlock returns the storage filename a block points at, tolerating
+// both "fileId" (current) and "attachmentId" (legacy) field names.
+func fileIDFromBlock(block *model.Block) string {
+	if block == nil || block.Fields == nil {
+		return ""
+	}
+	if v, ok := block.Fields[model.BlockFieldFileId].(string); ok && v != "" {
+		return v
+	}
+	if v, ok := block.Fields[model.BlockFieldAttachmentId].(string); ok && v != "" {
+		return v
+	}
+	return ""
+}
+
+// fileLinkFor builds an absolute (or relative if SiteURL not configured) URL
+// to the Boards file-serve endpoint. Agents holding a Mattermost session
+// cookie or session token can dereference it directly. With only an MCP
+// API key the URL is informational — get_attachment is the path that
+// inlines bytes through MCP transport.
+func (s *Server) fileLinkFor(b *model.Board, fileID string) string {
+	if b == nil || fileID == "" {
+		return ""
+	}
+	rel := fmt.Sprintf("/plugins/focalboard/api/v2/files/teams/%s/%s/%s", b.TeamID, b.ID, fileID)
+	if base := s.siteURL(); base != "" {
+		return base + rel
+	}
+	return rel
+}
+
+// attachmentFromBlock projects a stored image / video / attachment block
+// plus its FileInfo into the cardAttachment shape. fileInfo may be nil if
+// the lookup failed — fields that depend on it (size, mime, uploaded_at)
+// are then left at their zero values.
+//
+// Filename source-of-truth is block.Title — the original UTF-8 string we
+// stored when the agent / user uploaded. fileInfo.Name is the secondary
+// fallback because some Mattermost storage backends mangle non-ASCII into
+// '?' bytes in the FileInfo row.
+//
+// uploaded_by is resolved from block.CreatedBy (the real MCP caller). The
+// FileInfo.CreatorId column is unreliable because Mattermost's plugin file-
+// store API often stamps it with the plugin's service account ("boards")
+// rather than the human who triggered the upload.
+//
+// mime is always populated — empty falls back to "application/octet-stream"
+// so the agent can branch on it without nil-checks.
+func (s *Server) attachmentFromBlock(block *model.Block, board *model.Board, fileInfo *mm_model.FileInfo) cardAttachment {
+	out := cardAttachment{
+		ID:      block.ID,
+		CardID:  block.ParentID,
+		BoardID: block.BoardID,
+		Kind:    string(block.Type),
+		FileID:  fileIDFromBlock(block),
+	}
+	// Filename source-of-truth ladder:
+	//  1. block.Fields["filenameUTF8"] (percent-encoded ASCII; survives any
+	//     column charset)
+	//  2. block.Title (raw UTF-8; correct iff DB column charset is utf8mb4)
+	//  3. fileInfo.Name (Mattermost's column; often mangled if MM's FileInfo
+	//     table charset isn't utf8mb4)
+	out.Filename = block.Title
+	if v, ok := block.Fields[model.BlockFieldFilenameUTF8].(string); ok && v != "" {
+		if decoded, err := url.PathUnescape(v); err == nil && decoded != "" {
+			out.Filename = decoded
+		}
+	}
+	out.URL = s.fileLinkFor(board, out.FileID)
+	if fileInfo != nil {
+		out.Mime = fileInfo.MimeType
+		out.SizeBytes = fileInfo.Size
+		if out.Filename == "" && fileInfo.Name != "" {
+			out.Filename = fileInfo.Name
+		}
+		if fileInfo.CreateAt > 0 {
+			out.UploadedAt = fileInfo.CreateAt
+			out.UploadedISO = msToISO(fileInfo.CreateAt)
+		}
+	}
+	if out.UploadedAt == 0 && block.CreateAt > 0 {
+		out.UploadedAt = block.CreateAt
+		out.UploadedISO = msToISO(block.CreateAt)
+	}
+	if uid := block.CreatedBy; uid != "" {
+		out.UploadedBy = &assigneeRef{UserID: uid, Username: s.usernameFor(uid)}
+	} else if fileInfo != nil && fileInfo.CreatorId != "" {
+		out.UploadedBy = &assigneeRef{UserID: fileInfo.CreatorId, Username: s.usernameFor(fileInfo.CreatorId)}
+	}
+	if out.Mime == "" {
+		out.Mime = "application/octet-stream"
+	}
+	mime := strings.ToLower(out.Mime)
+	out.IsImage = strings.HasPrefix(mime, "image/")
+	out.IsVideo = strings.HasPrefix(mime, "video/")
+	out.IsAudio = strings.HasPrefix(mime, "audio/")
+	return out
+}
+
+// sanitizeAttachmentFilename normalises an agent-supplied filename for use as
+// the visible label of an attachment.
+//   - Empty / whitespace-only → rejected.
+//   - "." or ".." (the canonical filesystem reserved names) → rejected. They
+//     would render as a confusing label in the UI and aren't real filenames.
+//   - Path separators ('/' or '\\') → rejected. The whole point of accepting
+//     a "filename" rather than a path is that the caller already extracted
+//     the basename; receiving "../foo/bar.txt" usually means an LLM passed a
+//     filesystem path verbatim, which we'd otherwise surface visibly as the
+//     attachment label.
+//   - Any "..": rejected (path-traversal marker even when no separators
+//     present — keeps obvious traversal markers out of the visible label).
+//   - Otherwise: preserved as-is, including Unicode (cyrillic, emoji,
+//     spaces). The on-disk file is stored under a safe id+ext; this string
+//     only lives in block.Title and a percent-encoded copy in block.Fields.
+func sanitizeAttachmentFilename(name string) (string, error) {
+	s := strings.TrimSpace(name)
+	if s == "" {
+		return "", errors.New("filename is empty")
+	}
+	if s == "." || s == ".." {
+		return "", errors.New("filename must not be '.' or '..' — pass a real filename")
+	}
+	if strings.ContainsAny(s, "/\\") {
+		return "", errors.New("filename must not contain path separators ('/' or '\\\\') — pass only the basename")
+	}
+	if strings.Contains(s, "..") {
+		return "", errors.New("filename must not contain '..' (path-traversal marker)")
+	}
+	return s, nil
+}
+
+// loadAttachment is the per-call preamble for get_attachment / delete_attachment:
+// fetch the block, verify it really is image/attachment, load the parent card
+// + board, and check edit permission. Errors surface to the agent via the
+// returned toolsCallResult — pass it through.
+func (s *Server) loadAttachment(userID, attachmentID string, requireEdit bool) (*model.Block, *model.Card, *model.Board, *toolsCallResult) {
+	block, err := s.backend.GetBlockByID(attachmentID)
+	if err != nil || block == nil {
+		r := toolError("not found: attachment %s", attachmentID)
+		return nil, nil, nil, &r
+	}
+	if string(block.Type) != model.TypeImage && string(block.Type) != model.TypeAttachment && string(block.Type) != model.TypeVideo {
+		r := toolError("not an attachment: block %s is %s", attachmentID, block.Type)
+		return nil, nil, nil, &r
+	}
+	card, err := s.backend.GetCardByID(block.ParentID)
+	if err != nil || card == nil {
+		r := toolError("not found: parent card %s", block.ParentID)
+		return nil, nil, nil, &r
+	}
+	board, err := s.backend.GetBoard(card.BoardID)
+	if err != nil || board == nil {
+		r := toolError("not found: parent board %s", card.BoardID)
+		return nil, nil, nil, &r
+	}
+	if requireEdit {
+		if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+			r := toolError("permission denied: cannot edit cards on board %s", card.BoardID)
+			return nil, nil, nil, &r
+		}
+	} else {
+		if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionViewBoard) {
+			r := toolError("permission denied: cannot view board %s", card.BoardID)
+			return nil, nil, nil, &r
+		}
+	}
+	return block, card, board, nil
+}
+
+func (s *Server) toolGetAttachment() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name:        "get_attachment",
+			Description: "Fetches the body of one attachment. By default inlines up to 5 MB; pass max_bytes to override (hard cap 50 MB). Image MIMEs are returned as MCP image content (Claude can see them). Text MIMEs (text/*, application/json, application/x-yaml) are returned as text. Larger or binary files return only metadata + url — the agent should hand the url to the user instead of trying to inline. Returns the attachment metadata (same shape as get_card_details.attachments[]) plus the inline content block when applicable.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["attachment_id"],
+				"properties": {
+					"attachment_id": {"type": "string", "description": "Attachment / image / video block id from get_card_details().attachments."},
+					"max_bytes":     {"type": "integer", "description": "Maximum number of bytes to inline. Default 5_000_000 (5 MB). Hard server cap 50_000_000 (50 MB) — values above are clamped, values <= 0 fall back to default."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				AttachmentID string `json:"attachment_id"`
+				MaxBytes     int64  `json:"max_bytes"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.AttachmentID == "" {
+				return toolError("attachment_id is required"), nil
+			}
+			limit := args.MaxBytes
+			if limit <= 0 {
+				limit = attachmentInlineDefault
+			}
+			if limit > attachmentInlineHardCap {
+				limit = attachmentInlineHardCap
+			}
+
+			block, _, board, errResult := s.loadAttachment(userID, args.AttachmentID, false)
+			if errResult != nil {
+				return *errResult, nil
+			}
+			fileID := fileIDFromBlock(block)
+			if fileID == "" {
+				return toolError("attachment %s has no underlying file id", args.AttachmentID), nil
+			}
+			info, err := s.backend.GetFileInfo(fileID)
+			if err != nil {
+				return toolError("read file info: %v", err), nil
+			}
+			meta := s.attachmentFromBlock(block, board, info)
+
+			// Decide whether to inline. Size > limit → metadata-only.
+			if info != nil && info.Size > limit {
+				body, _ := json.MarshalIndent(map[string]interface{}{
+					"ok":         true,
+					"inlined":    false,
+					"reason":     fmt.Sprintf("file is %d bytes, exceeds max_bytes %d (hard cap %d). Pass a larger max_bytes or fetch the url with a Mattermost session.", info.Size, limit, int64(attachmentInlineHardCap)),
+					"attachment": meta,
+				}, "", "  ")
+				return toolsCallResult{Content: []toolContent{{Type: "text", Text: string(body)}}}, nil
+			}
+
+			data, _, err := s.backend.ReadFileBytes(board.TeamID, board.ID, fileID)
+			if err != nil {
+				return toolError("read file: %v", err), nil
+			}
+			mime := meta.Mime
+			if mime == "" || mime == "application/octet-stream" {
+				// Re-sniff from bytes — meta.Mime defaults to octet-stream
+				// when FileInfo had nothing, so let's give the bytes one
+				// more chance to identify themselves before we declare
+				// "binary" and refuse to inline.
+				if sniffed := http.DetectContentType(data); sniffed != "" {
+					mime = sniffed
+				}
+			}
+			if mime == "" {
+				mime = "application/octet-stream"
+			}
+			meta.Mime = mime
+			meta.SizeBytes = int64(len(data))
+			lc := strings.ToLower(mime)
+			meta.IsImage = strings.HasPrefix(lc, "image/")
+			meta.IsVideo = strings.HasPrefix(lc, "video/")
+			meta.IsAudio = strings.HasPrefix(lc, "audio/")
+
+			// Branch FIRST on whether we will actually inline, so the JSON
+			// `inlined` flag matches what the response actually contains.
+			canInlineImage := strings.HasPrefix(lc, "image/")
+			canInlineText := isInlineableTextMIME(lc)
+			willInline := canInlineImage || canInlineText
+
+			payload := map[string]interface{}{
+				"ok":         true,
+				"inlined":    willInline,
+				"attachment": meta,
+			}
+			if !willInline {
+				payload["reason"] = fmt.Sprintf("binary mime (%s); inline body is unsafe over MCP — fetch the url with a Mattermost session.", mime)
+			}
+			metaJSON, _ := json.MarshalIndent(payload, "", "  ")
+
+			content := []toolContent{{Type: "text", Text: string(metaJSON)}}
+			switch {
+			case canInlineImage:
+				content = append(content, toolContent{
+					Type:     "image",
+					Data:     base64.StdEncoding.EncodeToString(data),
+					MimeType: mime,
+				})
+			case canInlineText:
+				content = append(content, toolContent{
+					Type: "text",
+					Text: string(data),
+				})
+			}
+			return toolsCallResult{Content: content}, nil
+		},
+	}
+}
+
+// isInlineableTextMIME identifies MIMEs we will surface as a `text` content
+// block. text/* covers logs, markdown, csv, plain. The application/* allow-list
+// is restricted to formats whose body is genuinely text (json, yaml, xml,
+// shell scripts) — application/octet-stream et al. are kept out so we never
+// dump opaque binary into the agent's text channel.
+func isInlineableTextMIME(mime string) bool {
+	if strings.HasPrefix(mime, "text/") {
+		return true
+	}
+	switch mime {
+	case "application/json", "application/x-json",
+		"application/x-yaml", "application/yaml", "text/yaml",
+		"application/xml", "text/xml",
+		"application/x-sh", "application/x-shellscript",
+		"application/javascript", "application/x-www-form-urlencoded":
+		return true
+	}
+	return false
+}
+
+func (s *Server) toolAttachFile() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name:        "attach_file",
+			Description: "Attaches one file to a card. Pass data_base64 (the file content, base64-encoded) and filename. mime is autodetected if omitted. Routing by MIME: image/* → 'image' block (rendered inline in the card body with a lightbox); video/* → 'video' block (rendered inline as a player in the card body); everything else → 'attachment' block (rendered as a generic file row in the Attachment list). filename must be a basename — no '/' or '\\\\' separators, no '..' — but otherwise UTF-8 (cyrillic, emoji, spaces) is preserved. Returns the created attachment (same shape as get_card_details.attachments[]).",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["card_id", "filename", "data_base64"],
+				"properties": {
+					"card_id":     {"type": "string", "description": "Card to attach to."},
+					"filename":    {"type": "string", "description": "Visible label for the attachment. Must be a basename (no '/' or '\\\\', no '..') — otherwise full UTF-8 is preserved. The on-disk file gets a safe random id+extension regardless."},
+					"data_base64": {"type": "string", "description": "File body, base64-encoded."},
+					"mime":        {"type": "string", "description": "Override MIME. If omitted, the server sniffs from the bytes."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CardID     string `json:"card_id"`
+				Filename   string `json:"filename"`
+				DataBase64 string `json:"data_base64"`
+				Mime       string `json:"mime"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CardID == "" || args.DataBase64 == "" {
+				return toolError("card_id and data_base64 are required"), nil
+			}
+			title, ferr := sanitizeAttachmentFilename(args.Filename)
+			if ferr != nil {
+				return toolError("invalid filename: %v", ferr), nil
+			}
+			data, err := base64.StdEncoding.DecodeString(args.DataBase64)
+			if err != nil {
+				// Tolerate URL-safe base64 too.
+				data, err = base64.URLEncoding.DecodeString(args.DataBase64)
+				if err != nil {
+					return toolError("data_base64 is not valid base64: %v", err), nil
+				}
+			}
+			if len(data) == 0 {
+				return toolError("data_base64 decoded to zero bytes"), nil
+			}
+			card, err := s.backend.GetCardByID(args.CardID)
+			if err != nil || card == nil {
+				return toolError("not found: card %s", args.CardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
+			}
+			board, err := s.backend.GetBoard(card.BoardID)
+			if err != nil || board == nil {
+				return toolError("not found: parent board %s", card.BoardID), nil
+			}
+			mime := strings.TrimSpace(args.Mime)
+			if mime == "" {
+				mime = http.DetectContentType(data)
+			}
+			fileID, err := s.backend.SaveFile(bytes.NewReader(data), board.TeamID, board.ID, title, false)
+			if err != nil {
+				return toolError("save file: %v", err), nil
+			}
+
+			lcMime := strings.ToLower(mime)
+			blockType := model.TypeAttachment
+			switch {
+			case strings.HasPrefix(lcMime, "image/"):
+				blockType = model.TypeImage
+			case strings.HasPrefix(lcMime, "video/"):
+				blockType = model.TypeVideo
+			}
+			block := &model.Block{
+				ID:       utils.NewID(utils.IDTypeBlock),
+				BoardID:  card.BoardID,
+				ParentID: card.ID,
+				Type:     model.BlockType(blockType),
+				Title:    title,
+				Fields: map[string]interface{}{
+					model.BlockFieldFileId: fileID,
+					// Charset-safe duplicate. block.Title stores the raw
+					// UTF-8 string for UI rendering, but the title
+					// column may be non-utf8mb4 on legacy installs and
+					// silently rewrite multi-byte chars to '?'. The
+					// percent-encoded copy here is pure ASCII so it
+					// round-trips through any column charset; MCP
+					// readers prefer it over block.Title.
+					model.BlockFieldFilenameUTF8: url.PathEscape(title),
+				},
+				CreatedBy:  userID,
+				ModifiedBy: userID,
+			}
+			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
+				return toolError("insert attachment block: %v", err), nil
+			}
+
+			// Only image/video blocks live in card.contentOrder (rendered
+			// inline in the body). Generic 'attachment' blocks render in the
+			// separate AttachmentList component and are NOT in contentOrder
+			// — adding them there fires a "ContentElement, unknown content
+			// type: attachment" warning in the webapp.
+			if blockType == model.TypeImage || blockType == model.TypeVideo {
+				newOrder := append([]string{}, card.ContentOrder...)
+				newOrder = append(newOrder, block.ID)
+				patch := &model.CardPatch{ContentOrder: &newOrder}
+				if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+					s.logger.Warn("mcp: attachment inserted but contentOrder patch failed",
+						mlog.String("card_id", card.ID),
+						mlog.String("block_id", block.ID),
+						mlog.Err(err),
+					)
+				}
+			}
+
+			info, _ := s.backend.GetFileInfo(fileID)
+			persisted, perr := s.backend.GetBlockByID(block.ID)
+			if perr != nil || persisted == nil {
+				persisted = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":         true,
+				"attachment": s.attachmentFromBlock(persisted, board, info),
+				"card_id":    card.ID,
+				"card_link":  s.cardLinkFor(board, card.ID),
+			})
+		},
+	}
+}
+
+func (s *Server) toolDeleteAttachment() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name:        "delete_attachment",
+			Description: "Deletes one attachment (image or generic file) from a card. The block is soft-deleted, the id is removed from card.content_order, and the on-disk file is removed (and its FileInfo marked deleted) provided no other block in the same board still references it. Returns {ok, attachment_id}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["attachment_id"],
+				"properties": {
+					"attachment_id": {"type": "string", "description": "Attachment / image block id."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				AttachmentID string `json:"attachment_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.AttachmentID == "" {
+				return toolError("attachment_id is required"), nil
+			}
+			_, card, board, errResult := s.loadAttachment(userID, args.AttachmentID, true)
+			if errResult != nil {
+				return *errResult, nil
+			}
+			if err := s.backend.DeleteBlockAndNotify(args.AttachmentID, userID, false); err != nil {
+				return toolError("delete attachment: %v", err), nil
+			}
+			s.removeFromContentOrder(card, args.AttachmentID, userID)
+			return toolJSON(map[string]interface{}{
+				"ok":            true,
+				"attachment_id": args.AttachmentID,
+				"card_id":       card.ID,
+				"card_link":     s.cardLinkFor(board, card.ID),
 			})
 		},
 	}

@@ -362,6 +362,9 @@ func (a *App) DeleteBlockAndNotify(blockID string, modifiedBy string, disableNot
 		return err
 	}
 
+	// Clean up disk file for image/attachment blocks. No-op for other types.
+	a.DeleteFileForBlock(block)
+
 	a.blockChangeNotifier.Enqueue(func() error {
 		a.wsAdapter.BroadcastBlockDelete(board.TeamID, blockID, block.BoardID)
 		a.metrics.IncrementBlocksDeleted(1)
@@ -536,7 +539,7 @@ func (a *App) filterAuthorizedFilesForBoard(boardID string, fileIDs []string) ([
 	}
 
 	for _, block := range historyBlocks {
-		if block.Type != model.TypeImage && block.Type != model.TypeAttachment {
+		if block.Type != model.TypeImage && block.Type != model.TypeAttachment && block.Type != model.TypeVideo {
 			continue
 		}
 

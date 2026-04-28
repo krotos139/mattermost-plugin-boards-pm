@@ -39,7 +39,10 @@
     }
 
     .ImageElement {
-        pointer-events: none;
+        // pointer-events historically disabled to prevent the browser's
+        // native image drag-source from firing inside the content block.
+        // We now achieve the same with draggable={false} on the <img> in
+        // imageElement.tsx, which leaves clicks (e.g. open lightbox) intact.
         width: 100%;
     }
 }

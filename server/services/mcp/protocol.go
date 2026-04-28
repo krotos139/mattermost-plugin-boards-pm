@@ -101,7 +101,11 @@ type toolsCallParams struct {
 
 type toolContent struct {
 	Type string `json:"type"`
-	Text string `json:"text"`
+	// Text is the body for type=="text" results.
+	Text string `json:"text,omitempty"`
+	// Data is base64-encoded payload for type=="image" results, paired with MimeType.
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
 }
 
 type toolsCallResult struct {

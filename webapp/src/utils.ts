@@ -495,6 +495,24 @@ class Utils {
         // TODO: Remove or reuse input
     }
 
+    // Multi-file picker. Calls onSelect once with the full list of chosen files.
+    static selectLocalFiles(onSelect?: (files: File[]) => void, accept = ''): void {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.multiple = true
+        if (accept) {
+            input.accept = accept
+        }
+        input.onchange = async () => {
+            const files = input.files ? Array.from(input.files) : []
+            onSelect?.(files)
+        }
+
+        input.style.display = 'none'
+        document.body.appendChild(input)
+        input.click()
+    }
+
     // Arrays
 
     static arraysEqual(a: readonly any[], b: readonly any[]): boolean {

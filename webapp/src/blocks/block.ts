@@ -50,6 +50,7 @@ interface FileInfo {
     extension?: string
     name?: string
     size?: number
+    mime_type?: string
 }
 
 function createBlock(block?: Block): Block {

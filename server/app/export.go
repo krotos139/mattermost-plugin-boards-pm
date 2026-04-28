@@ -102,7 +102,7 @@ func (a *App) writeArchiveBoard(zw *zip.Writer, board model.Board, opt model.Exp
 		if err = a.writeArchiveBlockLine(w, block); err != nil {
 			return err
 		}
-		if block.Type == model.TypeImage || block.Type == model.TypeAttachment {
+		if block.Type == model.TypeImage || block.Type == model.TypeAttachment || block.Type == model.TypeVideo {
 			filename, err2 := extractFilename(block)
 			if err2 != nil {
 				return err2

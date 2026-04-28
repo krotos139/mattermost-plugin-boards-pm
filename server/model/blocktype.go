@@ -24,6 +24,7 @@ const (
 	TypeComment    = "comment"
 	TypeImage      = "image"
 	TypeAttachment = "attachment"
+	TypeVideo      = "video"
 	TypeDivider    = "divider"
 )
 
@@ -52,6 +53,8 @@ func BlockTypeFromString(s string) (BlockType, error) {
 		return TypeImage, nil
 	case "attachment":
 		return TypeAttachment, nil
+	case "video":
+		return TypeVideo, nil
 	case "divider":
 		return TypeDivider, nil
 	}
@@ -69,7 +72,7 @@ func BlockType2IDType(blockType BlockType) utils.IDType {
 		return utils.IDTypeView
 	case TypeText, TypeCheckbox, TypeSubtask, TypeComment, TypeDivider:
 		return utils.IDTypeBlock
-	case TypeImage, TypeAttachment:
+	case TypeImage, TypeAttachment, TypeVideo:
 		return utils.IDTypeAttachment
 	}
 	return utils.IDTypeNone

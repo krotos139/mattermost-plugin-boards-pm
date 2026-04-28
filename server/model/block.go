@@ -23,6 +23,15 @@ const (
 	BlockFieldsMaxRunes    = 800000
 	BlockFieldFileId       = "fileId"
 	BlockFieldAttachmentId = "attachmentId"
+	// BlockFieldFilenameUTF8 holds the original filename for an
+	// image/video/attachment block in URL-percent-encoded form. We store
+	// the percent-encoded ASCII rather than raw UTF-8 because the
+	// `focalboard_blocks.title` column may be created with a non-utf8mb4
+	// charset on some Mattermost installs (depends on the MM connection
+	// charset at table-creation time), which silently rewrites multi-byte
+	// chars to `?`. Percent-encoded ASCII round-trips through any
+	// connection charset, and we decode on read.
+	BlockFieldFilenameUTF8 = "filenameUTF8"
 )
 
 var (

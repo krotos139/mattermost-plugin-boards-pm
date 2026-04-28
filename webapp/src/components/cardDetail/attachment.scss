@@ -13,7 +13,9 @@
     .attachment-content {
         padding-bottom: 20px;
         display: flex;
-        overflow-x: auto;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
     }
 
     .attachment-plus-icon {

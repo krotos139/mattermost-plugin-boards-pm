@@ -1,0 +1,86 @@
+// Copyright (c) 2020-present Mattermost, Inc. All Rights Reserved.
+// See LICENSE.txt for license information.
+
+.ImageElement-thumbWrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.ImageElement {
+    cursor: zoom-in;
+    max-width: 100%;
+}
+
+.ImageElement-overlayActions {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 120ms ease-in-out;
+}
+
+.ImageElement-thumbWrap:hover .ImageElement-overlayActions {
+    opacity: 1;
+}
+
+.ImageElement-overlayBtn,
+.ImageElement-lightboxBtn {
+    background: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.95);
+    border: 0;
+    border-radius: 4px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+}
+
+.ImageElement-overlayBtn:hover,
+.ImageElement-lightboxBtn:hover {
+    background: rgba(0, 0, 0, 0.8);
+}
+
+.ImageElement-overlayBtn .CompassIcon,
+.ImageElement-lightboxBtn .CompassIcon {
+    font-size: 18px;
+}
+
+.ImageElement-lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: zoom-out;
+}
+
+.ImageElement-lightboxToolbar {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    gap: 8px;
+    z-index: 10000;
+}
+
+.ImageElement-lightboxImg {
+    // Fill the viewport. Explicit width/height (not just max-*) forces
+    // small images to scale UP to use the available space; object-fit
+    // contain keeps aspect ratio and adds letterbox bars instead of
+    // distorting. Without this the lightbox just shows the image at its
+    // natural pixel size — useless for a 200×200 thumb, no different
+    // from the in-card preview.
+    width: 95vw;
+    height: 92vh;
+    object-fit: contain;
+    cursor: default;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}

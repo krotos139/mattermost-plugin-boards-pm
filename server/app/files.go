@@ -199,6 +199,11 @@ func (a *App) validateFileReferencedByBoard(boardID, filename string) error {
 		return err
 	}
 
+	videoBlocks, err := a.store.GetBlocksWithType(boardID, model.TypeVideo)
+	if err != nil {
+		return err
+	}
+
 	for _, block := range imageBlocks {
 		if fileID, ok := block.Fields[model.BlockFieldFileId].(string); ok && fileID == filename {
 			return nil
@@ -207,6 +212,12 @@ func (a *App) validateFileReferencedByBoard(boardID, filename string) error {
 
 	for _, block := range attachmentBlocks {
 		if attachmentID, ok := block.Fields[model.BlockFieldAttachmentId].(string); ok && attachmentID == filename {
+			return nil
+		}
+	}
+
+	for _, block := range videoBlocks {
+		if fileID, ok := block.Fields[model.BlockFieldFileId].(string); ok && fileID == filename {
 			return nil
 		}
 	}
@@ -405,6 +416,140 @@ func (a *App) GetFileReader(teamID, boardID, filename string) (filestore.ReadClo
 	return reader, nil
 }
 
+// ReadFileBytes opens the file via filesBackend, reads it fully into memory,
+// and returns the bytes alongside its FileInfo. Callers should check
+// FileInfo.Size from a prior GetFileInfo before invoking this on large files —
+// the whole body is loaded into RAM.
+func (a *App) ReadFileBytes(teamID, boardID, filename string) ([]byte, *mm_model.FileInfo, error) {
+	info, reader, err := a.GetFile(teamID, boardID, filename)
+	if err != nil {
+		return nil, info, err
+	}
+	if reader == nil {
+		return nil, info, ErrFileNotFound
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, info, err
+	}
+	return data, info, nil
+}
+
+// DeleteFileForBlock removes the on-disk file for an image/attachment block
+// and marks the FileInfo as deleted, when no other block in the same board
+// still references the file. Errors are logged but never returned — orphan
+// cleanup must not fail a block-delete.
+func (a *App) DeleteFileForBlock(block *model.Block) {
+	if block == nil {
+		return
+	}
+	if block.Type != model.TypeImage && block.Type != model.TypeAttachment && block.Type != model.TypeVideo {
+		return
+	}
+
+	var fileID string
+	if v, ok := block.Fields[model.BlockFieldFileId].(string); ok && v != "" {
+		fileID = v
+	} else if v, ok := block.Fields[model.BlockFieldAttachmentId].(string); ok && v != "" {
+		fileID = v
+	}
+	if fileID == "" {
+		return
+	}
+
+	board, err := a.store.GetBoard(block.BoardID)
+	if err != nil || board == nil {
+		a.logger.Warn("DeleteFileForBlock: cannot resolve board",
+			mlog.String("blockID", block.ID), mlog.Err(err))
+		return
+	}
+
+	// Skip deletion if another block in the same board still references the file
+	// (e.g., after CopyCardFiles assigns identical fileID, or duplicates).
+	if a.fileStillReferenced(board.ID, fileID, block.ID) {
+		a.logger.Debug("DeleteFileForBlock: file still referenced, skipping disk removal",
+			mlog.String("blockID", block.ID),
+			mlog.String("fileID", fileID))
+		return
+	}
+
+	fileInfo, filePath, err := a.GetFilePath(board.TeamID, board.ID, fileID)
+	if err != nil {
+		a.logger.Warn("DeleteFileForBlock: cannot resolve file path",
+			mlog.String("blockID", block.ID),
+			mlog.String("fileID", fileID),
+			mlog.Err(err))
+		return
+	}
+
+	if err := a.filesBackend.RemoveFile(filePath); err != nil {
+		a.logger.Warn("DeleteFileForBlock: filesBackend.RemoveFile failed",
+			mlog.String("path", filePath), mlog.Err(err))
+		return
+	}
+
+	if fileInfo != nil {
+		fileInfo.DeleteAt = utils.GetMillis()
+		if err := a.store.SaveFileInfo(fileInfo); err != nil {
+			a.logger.Warn("DeleteFileForBlock: SaveFileInfo mark-deleted failed",
+				mlog.String("fileID", fileID), mlog.Err(err))
+		}
+	}
+}
+
+// fileStillReferenced returns true if any block in the board (other than
+// excludeBlockID) references the given fileID.
+func (a *App) fileStillReferenced(boardID, fileID, excludeBlockID string) bool {
+	imageBlocks, err := a.store.GetBlocksWithType(boardID, model.TypeImage)
+	if err != nil {
+		// Conservative: if we cannot tell, assume still referenced and skip removal.
+		return true
+	}
+	attachmentBlocks, err := a.store.GetBlocksWithType(boardID, model.TypeAttachment)
+	if err != nil {
+		return true
+	}
+	videoBlocks, err := a.store.GetBlocksWithType(boardID, model.TypeVideo)
+	if err != nil {
+		return true
+	}
+	for _, b := range imageBlocks {
+		if b.ID == excludeBlockID {
+			continue
+		}
+		if v, ok := b.Fields[model.BlockFieldFileId].(string); ok && v == fileID {
+			return true
+		}
+		if v, ok := b.Fields[model.BlockFieldAttachmentId].(string); ok && v == fileID {
+			return true
+		}
+	}
+	for _, b := range attachmentBlocks {
+		if b.ID == excludeBlockID {
+			continue
+		}
+		if v, ok := b.Fields[model.BlockFieldFileId].(string); ok && v == fileID {
+			return true
+		}
+		if v, ok := b.Fields[model.BlockFieldAttachmentId].(string); ok && v == fileID {
+			return true
+		}
+	}
+	for _, b := range videoBlocks {
+		if b.ID == excludeBlockID {
+			continue
+		}
+		if v, ok := b.Fields[model.BlockFieldFileId].(string); ok && v == fileID {
+			return true
+		}
+		if v, ok := b.Fields[model.BlockFieldAttachmentId].(string); ok && v == fileID {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) MoveFile(channelID, teamID, boardID, filename string) error {
 	// Validate path components to ensure proper file path handling
 	if !mm_model.IsValidId(channelID) {
@@ -574,7 +719,7 @@ func (a *App) CopyAndUpdateCardFiles(boardID, userID string, blocks []*model.Blo
 	blockIDs := make([]string, 0)
 	blockPatches := make([]model.BlockPatch, 0)
 	for _, block := range blocks {
-		if block.Type == model.TypeImage || block.Type == model.TypeAttachment {
+		if block.Type == model.TypeImage || block.Type == model.TypeAttachment || block.Type == model.TypeVideo {
 			if fileID, ok := block.Fields[model.BlockFieldFileId].(string); ok && fileID != "" {
 				var patchErr error
 				blockIDs, blockPatches, patchErr = a.processFileIDPatch(block, fileID, newFileNames, blockIDs, blockPatches)
@@ -629,7 +774,7 @@ func (a *App) CopyCardFiles(sourceBoardID string, copiedBlocks []*model.Block, a
 	var destBoard *model.Board
 	newFileNames := make(map[string]string)
 	for _, block := range copiedBlocks {
-		if block.Type != model.TypeImage && block.Type != model.TypeAttachment {
+		if block.Type != model.TypeImage && block.Type != model.TypeAttachment && block.Type != model.TypeVideo {
 			continue
 		}
 

@@ -45,6 +45,15 @@ type Backend interface {
 	InsertBlockAndNotify(block *model.Block, modifiedByID string, disableNotify bool) error
 	PatchBlockAndNotify(blockID string, blockPatch *model.BlockPatch, modifiedByID string, disableNotify bool) (*model.Block, error)
 	DeleteBlockAndNotify(blockID string, modifiedBy string, disableNotify bool) error
+
+	// File-level operations for attachment MCP tools. SaveFile uploads bytes
+	// (the MCP layer wraps base64-decoded data in an io.Reader). GetFileInfo
+	// returns metadata (mime, size, name) without reading the body.
+	// ReadFileBytes streams the body fully into memory — callers must
+	// pre-check size via GetFileInfo to avoid loading huge files.
+	SaveFile(reader io.Reader, teamID, boardID, filename string, asTemplate bool) (string, error)
+	GetFileInfo(filename string) (*mm_model.FileInfo, error)
+	ReadFileBytes(teamID, boardID, filename string) ([]byte, *mm_model.FileInfo, error)
 }
 
 // SessionAPI is the subset of plugin.API we need to validate bearer tokens,
