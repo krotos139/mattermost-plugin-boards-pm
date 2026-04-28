@@ -34,6 +34,37 @@ A bar is drawn for every card whose **Display by** property has at least a start
 
 **Side panel.** Whatever properties you mark as visible in **Properties** (top-right gear) show up as columns to the left of the chart. Drag the right edge of a column header to resize; widths persist per view and sync via Mattermost websocket to other clients.
 
+### Resource view
+
+A second Gantt-flavoured view that pivots the same data around **resources** instead of cards. Each row is one resource — every value that appears in the configured **Resources by** property gets a swim lane, and the bars on the lane are the cards that resource is occupied with. A multi-value card produces one bar on each of its values' lanes; cards with no value fall into an `Unassigned` group pinned at the bottom. The headline question this view answers is "who/what is busy with what this week, and is anything double-booked?".
+
+The resource axis isn't restricted to people. Anything that lives on the card as a `select` / `multiSelect` value can drive the swim lanes, so the same view doubles as a planner for non-human resources — machines, meeting rooms, vehicles, lab equipment. Make a `select` property called e.g. `Station` with options `Lathe`, `CNC`, `Press` and pick it under **Resources by**: every station gets its own lane and you can see at a glance which day each station is booked.
+
+**Setup.** `+` next to the view tabs → **Resource**. Configure via the header buttons:
+
+| Header button | Sets | Accepts properties of type |
+| --- | --- | --- |
+| **Display by** | Date used to position and size each bar | `date`, `deadline`, `createdTime`, `updatedTime` |
+| **Resources by** | Property whose values become swim lanes | `person`, `multiPerson`, `personNotify`, `multiPersonNotify`, `select`, `multiSelect`, `createdBy`, `updatedBy` (last two are read-only — see below) |
+| **Progress by** | 0–100 number that fills the bar | `number` |
+| **Color by** | Bar fill color | `select` |
+
+**Conflicts.** Bars whose date ranges overlap on the same swim lane are flagged with a red dashed outline — instant visual signal that someone is double-booked. The detection runs per resource, so the same card occupying two different lanes (a multi-person assignment) is *not* flagged unless those two assignees each have other overlapping work.
+
+**Drag-to-reassign.** Dragging a bar onto a different swim lane reassigns the card to that resource: the old value is removed and the new one added. Works in both axes — drag diagonally to reassign *and* reschedule in one move; both updates land in a single undo entry, so one Cmd-Z reverts both. For multi-value properties (`multiPerson`, `multiSelect`, ...) only the source-lane value is removed (other co-values on the card are kept); for single-value properties the value is replaced. Dropping on the **Unassigned** lane clears the value (single) or removes the source value from the list (multi). The drop-target lane lights up in blue while you're hovering, so you always see where the bar will land.
+
+`createdBy` / `updatedBy` are read-only properties: the view will still group cards by them (so you can see "what each author is working on"), but the drag-to-reassign UI is suppressed.
+
+**Group toggle.** Click the chevron next to a resource label to fold the lane down to a single aggregate bar that spans the union of every card's date range, with a "5 tasks" suffix on the bar label. Useful when the team is large and you only want to see a few people in detail. Collapsed state is persisted in the view's `collapsedOptionIds`, so it stays the same on page refresh and syncs to other clients via the regular block-update websocket.
+
+**Per-lane summary.** The first row of each swim lane shows `N tasks · M days` next to the resource name — total card count and total day-span (sums of each card's day-span; same resource on multiple cards over the same dates double-counts intentionally so the number reflects committed time). The summary stays accurate even when the lane is collapsed.
+
+**Side panel.** Just like Timeline view, properties marked visible under **Properties** (top-right gear) appear as columns to the right of the resource label. Click a card's bar to see every non-empty card property in the rich popup, or double-click the bar to open the card. Drag the right edge of a column header to resize; widths are persisted per view in the same `columnWidths` map Timeline uses (the resource label column lives at synthetic key `__resource`).
+
+**No flicker on incremental updates.** The chart instance is created once and reused: when a group is collapsed/expanded, a card is reassigned, or a conflict appears/disappears, the bars are reconciled in place via `gantt.refresh(...)` (with manual scroll preservation) or direct `classList` patching for class-only changes. Tear-down is reserved for the readonly toggle. In practice this means the viewport stays put and there is no perceptible flash on data changes.
+
+**Drag-to-reschedule.** Same as Timeline view: drag horizontally to shift the card's date property. There's no parent → child cascade here — the relation is "what each person is doing", not "what depends on what".
+
 ### Deadline property + DM reminders
 
 A new `deadline` property type that's a date with a reminder. When the deadline approaches, the assigned user (taken from a `Person (notify)` or `Multi person (notify)` property on the same card) receives a Mattermost DM with a link back to the card. No need to leave Boards open — Mattermost itself nudges you.

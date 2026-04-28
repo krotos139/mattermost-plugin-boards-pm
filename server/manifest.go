@@ -18,9 +18,9 @@ const manifestStr = `
   "description": "Mattermost Boards plugin with project-management extensions: Timeline view, deadlines + DM reminders, dashboard boards, mobile login handoff.",
   "homepage_url": "https://github.com/krotos139/mattermost-plugin-boards-pm",
   "support_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/issues",
-  "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.3.0",
+  "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.3.1",
   "icon_path": "assets/starter-template-icon.svg",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "min_server_version": "10.7.0",
   "server": {
     "executables": {

@@ -1,8 +1,15 @@
 .GanttContainer {
+    // Vertical flex column so the inner __layout fills the parent
+    // height; the chart's frappe-gantt `.gantt-container` collapses to
+    // its bars-content height by default (CSS var `--gv-grid-height`
+    // unset → `height: auto`), which without these layout rules leaves
+    // empty space below and produces a phantom outer scrollbar.
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
     padding: 12px 24px;
+    display: flex;
+    flex-direction: column;
 
     &--empty {
         color: rgba(var(--center-channel-color-rgb), 0.6);
@@ -16,12 +23,17 @@
         min-width: 0;
         min-height: 0;
         width: 100%;
+        // Fill the container vertically; otherwise the chart's
+        // intrinsic min-height drives the layout height and an outer
+        // scroll appears even when nothing overflows.
+        flex: 1 1 auto;
     }
 
     &__chart {
         flex: 1 1 auto;
         min-width: 0;
-        min-height: 400px;
+        min-height: 0;
+        height: 100%;
         // Suppress text selection inside the chart — drag-to-reschedule
         // would otherwise also select the bar's text label and any nearby
         // header text, aborting the drag handlers. CSS alone doesn't cover
@@ -41,6 +53,17 @@
             -webkit-user-select: none;
             -moz-user-select: none;
             -ms-user-select: none;
+        }
+
+        // Force `.gantt-container` to fill the chart cell instead of
+        // shrink-wrapping to the bars. The vendor sets `height: var(
+        // --gv-grid-height)` but we don't pass `container_height` to
+        // the Ctor, so the variable is unset and height defaults to
+        // auto. !important is needed because the vendor's flat
+        // selector beats our nested chain on source order.
+        > .gantt-container {
+            height: 100% !important;
+            max-height: 100%;
         }
     }
 

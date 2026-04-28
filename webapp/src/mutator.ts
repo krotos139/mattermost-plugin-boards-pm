@@ -916,6 +916,24 @@ class Mutator {
         )
     }
 
+    // Generic toggle for view.fields.collapsedOptionIds. The Resource view
+    // uses this to remember which swim lanes are folded (one entry per
+    // collapsed user / "__unassigned" id). Each view block has its own
+    // collapsedOptionIds array, so the field is safe to share with Kanban
+    // even though the id namespaces differ.
+    async changeViewCollapsedOptionIds(boardId: string, viewId: string, oldCollapsed: string[], collapsed: string[], description = 'collapse group'): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, {updatedFields: {collapsedOptionIds: collapsed}})
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, {updatedFields: {collapsedOptionIds: oldCollapsed}})
+            },
+            description,
+            this.undoGroupId,
+        )
+    }
+
     async changeViewVisiblePropertiesOrder(boardId: string, view: BoardView, template: IPropertyTemplate, destIndex: number, description = 'change property order'): Promise<void> {
         const oldVisiblePropertyIds = view.fields.visiblePropertyIds
         const newOrder = oldVisiblePropertyIds.slice()

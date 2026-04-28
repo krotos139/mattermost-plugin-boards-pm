@@ -5,10 +5,18 @@
 // gains custom chrome later.
 
 .ResourceContainer {
+    // Make this a vertical flex column so the inner __layout can flex-
+    // grow to fill the parent height; otherwise the chain stops at the
+    // chart's intrinsic content height and a phantom outer scrollbar
+    // appears even when nothing overflows. `overflow: hidden` keeps that
+    // outer scrollbar suppressed in favor of the chart's inner one (the
+    // frappe-gantt `.gantt-container` has its own `overflow: auto`).
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
     padding: 12px 24px;
+    display: flex;
+    flex-direction: column;
 
     &--empty {
         color: rgba(var(--center-channel-color-rgb), 0.6);
@@ -22,12 +30,22 @@
         min-width: 0;
         min-height: 0;
         width: 100%;
+        // Take all the vertical space left by the (possible) header so
+        // the chart and side panel fill the container instead of
+        // collapsing to 400px and triggering an outer scroll.
+        flex: 1 1 auto;
     }
 
     &__chart {
         flex: 1 1 auto;
         min-width: 0;
-        min-height: 400px;
+        // Important: explicit `min-height: 0` so the flex child can
+        // shrink below its intrinsic content size (the SVG inside the
+        // gantt-container can be hundreds of bars tall — without this
+        // the parent flex would expand to fit it and yield an outer
+        // scrollbar).
+        min-height: 0;
+        height: 100%;
         user-select: none;
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -40,6 +58,20 @@
             -webkit-user-select: none;
             -moz-user-select: none;
             -ms-user-select: none;
+        }
+
+        // Override frappe-gantt's `.gantt-container { height: var(
+        // --gv-grid-height) }`. The vendor CSS variable defaults to
+        // unset (because we don't pass `container_height` to the Ctor),
+        // which collapses height to `auto` — i.e. shrink-wrap to the
+        // bars. Force it to fill the chart cell so the bar list
+        // scrolls inside the container instead of making the whole
+        // ResourceContainer scroll. !important is needed because the
+        // vendor selector has a higher source-order than our nested
+        // class chain.
+        > .gantt-container {
+            height: 100% !important;
+            max-height: 100%;
         }
     }
 
@@ -87,6 +119,22 @@
     // swim lanes are visually separated from each other.
     &__props-row--first {
         border-top: 1px solid rgba(var(--center-channel-color-rgb), 0.18);
+    }
+
+    // Drop-target highlight while drag-to-reassign is in flight. Painted
+    // on every row whose resourceId matches the cursor's hovered lane,
+    // so the user gets a strong cue even when the lane spans multiple
+    // rows. The blue tint matches the rest of the Mattermost UI.
+    &__props-row--drop-target {
+        background: rgba(var(--button-bg-rgb, 28, 88, 217), 0.12);
+        box-shadow: inset 4px 0 0 rgba(var(--button-bg-rgb, 28, 88, 217), 0.7);
+    }
+
+    // Collapsed group: the single aggregate row picks up a subtle
+    // background tint so it reads as "folded" without competing with the
+    // drop-target highlight.
+    &__props-row--collapsed {
+        background: rgba(var(--center-channel-color-rgb), 0.025);
     }
 
     &__props-cell {
@@ -151,16 +199,27 @@
         }
     }
 
-    // Two-line cell layout for the resource label: name on top, workload
-    // summary below in a smaller muted font. Only rendered for the first
-    // row of each group, which is why we let it overflow the row's height
+    // First-row cell layout: chevron on the left, two-line label
+    // (name + summary) on the right. Only rendered for the first row of
+    // each group, which is why we let it overflow the row's height
     // budget by using compact line-heights.
     &__resource-cell {
         display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        line-height: 1.2;
+        overflow: hidden;
+        height: 100%;
+    }
+
+    &__resource-text {
+        display: flex;
         flex-direction: column;
         justify-content: center;
-        line-height: 1.2;
         gap: 2px;
+        min-width: 0;
+        flex: 1 1 auto;
         overflow: hidden;
     }
 
@@ -181,10 +240,43 @@
         white-space: nowrap;
     }
 
+    // Group toggle chevron. Renders inline with the resource label;
+    // clicking it folds / unfolds the swim lane via
+    // mutator.changeViewCollapsedOptionIds.
+    &__chevron {
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        border: none;
+        color: rgba(var(--center-channel-color-rgb), 0.65);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        transition: background 120ms ease, color 120ms ease;
+
+        svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        &:hover {
+            background: rgba(var(--center-channel-color-rgb), 0.08);
+            color: rgb(var(--center-channel-color-rgb));
+        }
+    }
+
     .frappe-gantt-popup {
         font-size: 13px;
     }
 
+    // Rich popup mirroring ganttView's layout: title on top, key/value
+    // grid below for every non-empty card property. Same selector names
+    // (`GanttPopup`) so the popup CSS stays drop-in compatible.
     .GanttPopup {
         font-size: 13px;
         max-width: 320px;
@@ -197,17 +289,51 @@
             color: var(--g-text-dark, rgb(var(--center-channel-color-rgb)));
             word-break: break-word;
         }
+
+        &__rows {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            row-gap: 4px;
+            column-gap: 8px;
+        }
+
+        &__row {
+            display: contents;
+        }
+
+        &__label {
+            color: var(--g-text-muted, rgba(var(--center-channel-color-rgb), 0.65));
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        &__value {
+            color: var(--g-text-dark, rgb(var(--center-channel-color-rgb)));
+            font-size: 12px;
+            word-break: break-word;
+            min-width: 0;
+        }
     }
 
-    // Conflict signal: bars that overlap on the same resource row get a
-    // hatched diagonal fill so the user spots double-booked time at a
-    // glance. The base color comes from `Color by` (or default) and we
-    // overlay a strong red stroke + gradient.
-    .gantt .bar-wrapper.gantt-bar-conflict {
+    // Collapsed-group aggregate bar. Muted fill + dashed outline so the
+    // summary reads as "this is a folded row, not a real card".
+    .gantt .bar-wrapper.gantt-bar-group {
+        opacity: 0.85;
+
         .bar {
-            stroke: rgba(220, 53, 69, 0.95);
-            stroke-width: 1.5;
-            stroke-dasharray: 4 2;
+            fill: rgba(var(--center-channel-color-rgb), 0.18);
+            stroke: rgba(var(--center-channel-color-rgb), 0.4);
+            stroke-width: 1;
+            stroke-dasharray: 6 3;
+        }
+
+        .bar-progress {
+            fill: rgba(var(--center-channel-color-rgb), 0.32);
+        }
+
+        .bar-label {
+            fill: rgba(var(--center-channel-color-rgb), 0.85);
+            font-style: italic;
         }
     }
 
@@ -261,6 +387,20 @@
             .bar { fill: var(--prop-red); }
             .bar-progress { fill: color-mix(in srgb, var(--prop-red), black 30%); }
         }
+    }
+
+    // Conflict signal: bars that overlap on the same resource row get a
+    // strong red dashed outline so the user spots double-booked time at
+    // a glance. Declared AFTER the `Color by` rules and with the
+    // doubled `.gantt-bar-conflict` class so the selector wins on both
+    // specificity AND source-order against the color stroke / fill —
+    // otherwise a colored bar with a conflict would show only the color
+    // outline. Fill is left to the color rule (or the default) so the
+    // user can still see *which* bar conflicts; only the stroke flips.
+    .gantt .bar-wrapper.gantt-bar-conflict.gantt-bar-conflict .bar {
+        stroke: rgba(220, 53, 69, 0.95);
+        stroke-width: 1.8;
+        stroke-dasharray: 4 2;
     }
 
     .gantt .grid-header {

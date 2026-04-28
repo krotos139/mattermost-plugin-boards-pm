@@ -25,15 +25,21 @@ type Props = {
 }
 
 // Keep this list in sync with the resource-extraction logic in
-// resourceView.tsx — every type that yields user ids must appear here so
-// the menu can offer it as a swim-lane source.
+// resourceView.tsx — every type whose value can be used as a swim-lane
+// key must appear here. Person-flavoured properties give user ids;
+// select / multiSelect give option ids (useful for non-human resources
+// like equipment / stations / rooms — anything you want to plan time
+// against). createdBy / updatedBy are listed as read-only sources:
+// the view groups by them, but drag-to-reassign is suppressed.
 const isResourceProperty = (t: IPropertyTemplate): boolean => (
     t.type === 'person' ||
     t.type === 'multiPerson' ||
     t.type === 'personNotify' ||
     t.type === 'multiPersonNotify' ||
     t.type === 'createdBy' ||
-    t.type === 'updatedBy'
+    t.type === 'updatedBy' ||
+    t.type === 'select' ||
+    t.type === 'multiSelect'
 )
 
 const ViewHeaderResourceByMenu = (props: Props) => {
@@ -95,7 +101,7 @@ const ViewHeaderResourceByMenu = (props: Props) => {
                         id={'__no-resource-property'}
                         name={intl.formatMessage({
                             id: 'ViewHeader.resource-by-empty',
-                            defaultMessage: 'No person properties on this board',
+                            defaultMessage: 'No person or select properties on this board',
                         })}
                         onClick={() => {}}
                     />
