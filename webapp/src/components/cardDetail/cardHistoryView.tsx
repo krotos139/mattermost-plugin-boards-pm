@@ -251,6 +251,20 @@ const renderEvent = (
                 {hasTextBody(event.blockType) && renderQuoteDiff(event.before, event.after)}
             </span>
         )
+    case 'subtask-state':
+        return (
+            <span>
+                <FormattedMessage
+                    id='CardHistory.subtask-state'
+                    defaultMessage='changed subtask state'
+                />
+                {' '}
+                {event.before && <span className='value-chip'>{event.before}</span>}
+                {event.before && ' → '}
+                {event.after && <span className='value-chip'>{event.after}</span>}
+                {!event.before && event.after && <span className='value-chip'>{event.after}</span>}
+            </span>
+        )
     case 'desc-removed':
         return (
             <span>

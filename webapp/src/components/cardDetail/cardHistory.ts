@@ -14,6 +14,7 @@ export type HistoryEventKind =
     | 'comment-added'
     | 'comment-edited'
     | 'comment-removed'
+    | 'subtask-state'
 
 export type CardHistoryEvent = {
     timestamp: number

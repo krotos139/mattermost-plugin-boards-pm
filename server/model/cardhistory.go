@@ -16,6 +16,11 @@ const (
 	HistoryEventDescAdded       HistoryEventKind = "desc-added"
 	HistoryEventDescEdited      HistoryEventKind = "desc-edited"
 	HistoryEventDescRemoved     HistoryEventKind = "desc-removed"
+	// Subtask-only: emitted when a user toggles the subtask state cycle
+	// (Fields.optionId), separate from desc-edited which covers title
+	// edits. Lets the renderer show "before -> after" with state labels
+	// resolved from the board's subtaskStates property.
+	HistoryEventSubtaskStateChanged HistoryEventKind = "subtask-state"
 	HistoryEventCommentAdded    HistoryEventKind = "comment-added"
 	HistoryEventCommentEdited   HistoryEventKind = "comment-edited"
 	HistoryEventCommentRemoved  HistoryEventKind = "comment-removed"

@@ -60,6 +60,13 @@ func (a *App) GetCardHistory(boardID, cardID string) ([]*model.CardHistoryEvent,
 	}
 
 	propLookup := buildPropertyLookup(board.CardProperties)
+	// Resolve the subtask-states option lookup once. Subtask blocks store
+	// their state in Fields.optionId, where optionId references one of the
+	// options on the property pointed to by board.Properties.subtaskStatesPropertyId.
+	// We pre-build "option id -> label" so diffSubBlockVersion can render
+	// "before -> after" with human-readable values like "todo" / "done"
+	// instead of the raw option ids that nothing else in the UI exposes.
+	subtaskStateLabels := resolveSubtaskStateLabels(board.Properties, propLookup)
 
 	events := make([]*model.CardHistoryEvent, 0)
 	for blockID, versions := range versionsByID {
@@ -67,7 +74,7 @@ func (a *App) GetCardHistory(boardID, cardID string) ([]*model.CardHistoryEvent,
 			continue
 		}
 		isCard := blockID == cardID
-		events = append(events, diffBlockVersions(versions, isCard, propLookup)...)
+		events = append(events, diffBlockVersions(versions, isCard, propLookup, subtaskStateLabels)...)
 	}
 
 	// Chronological order (oldest first). Stable secondary sort by blockID
@@ -124,10 +131,29 @@ func buildPropertyLookup(cardProperties []map[string]interface{}) map[string]pro
 	return out
 }
 
+// resolveSubtaskStateLabels returns option-id -> label for the property a
+// board's subtaskStatesPropertyId points at. Returns nil when the board has
+// no subtask states configured (the Subtasks block then renders a "configure
+// in board settings" placeholder, and there is no state for history to log).
+func resolveSubtaskStateLabels(boardProperties map[string]interface{}, props map[string]propertyInfo) map[string]string {
+	if boardProperties == nil {
+		return nil
+	}
+	propID, _ := boardProperties["subtaskStatesPropertyId"].(string)
+	if propID == "" {
+		return nil
+	}
+	info, ok := props[propID]
+	if !ok || info.options == nil {
+		return nil
+	}
+	return info.options
+}
+
 // diffBlockVersions walks one block's version stream and emits events for
 // each consecutive (vN-1, vN) pair, plus an initial creation event for the
 // card root.
-func diffBlockVersions(versions []*model.Block, isCard bool, props map[string]propertyInfo) []*model.CardHistoryEvent {
+func diffBlockVersions(versions []*model.Block, isCard bool, props map[string]propertyInfo, subtaskStateLabels map[string]string) []*model.CardHistoryEvent {
 	out := make([]*model.CardHistoryEvent, 0)
 	if len(versions) == 0 {
 		return out
@@ -153,7 +179,7 @@ func diffBlockVersions(versions []*model.Block, isCard bool, props map[string]pr
 		if isCard {
 			out = append(out, diffCardVersion(prev, curr, props)...)
 		} else {
-			out = append(out, diffSubBlockVersion(prev, curr)...)
+			out = append(out, diffSubBlockVersion(prev, curr, subtaskStateLabels)...)
 		}
 	}
 
@@ -291,7 +317,7 @@ func diffCardVersion(prev, curr *model.Block, props map[string]propertyInfo) []*
 	return out
 }
 
-func diffSubBlockVersion(prev, curr *model.Block) []*model.CardHistoryEvent {
+func diffSubBlockVersion(prev, curr *model.Block, subtaskStateLabels map[string]string) []*model.CardHistoryEvent {
 	out := make([]*model.CardHistoryEvent, 0)
 
 	// A delete is encoded as a row with delete_at>0; the removal event is
@@ -301,23 +327,67 @@ func diffSubBlockVersion(prev, curr *model.Block) []*model.CardHistoryEvent {
 		return out
 	}
 
-	if prev.Title == curr.Title {
-		return out
+	if prev.Title != curr.Title {
+		if kind := editKindFor(curr.Type); kind != "" {
+			out = append(out, &model.CardHistoryEvent{
+				Timestamp: curr.UpdateAt,
+				UserID:    curr.ModifiedBy,
+				Kind:      kind,
+				BlockID:   curr.ID,
+				BlockType: string(curr.Type),
+				Before:    prev.Title,
+				After:     curr.Title,
+			})
+		}
 	}
-	kind := editKindFor(curr.Type)
-	if kind == "" {
-		return out
+
+	// Subtask state cycle (todo / in-progress / done) lives in
+	// Fields.optionId, NOT in the title. The title-only diff above misses
+	// it entirely, which means picking a state in the UI used to leave no
+	// trace in history. Emit a separate edit event whenever the option
+	// changes; render labels via the board's subtaskStates property so
+	// the activity log shows "before: todo, after: done" instead of
+	// opaque option ids.
+	if curr.Type == model.TypeSubtask {
+		prevOpt := stringField(prev, "optionId")
+		currOpt := stringField(curr, "optionId")
+		if prevOpt != currOpt {
+			out = append(out, &model.CardHistoryEvent{
+				Timestamp: curr.UpdateAt,
+				UserID:    curr.ModifiedBy,
+				Kind:      model.HistoryEventSubtaskStateChanged,
+				BlockID:   curr.ID,
+				BlockType: string(curr.Type),
+				Before:    subtaskStateLabel(prevOpt, subtaskStateLabels),
+				After:     subtaskStateLabel(currOpt, subtaskStateLabels),
+			})
+		}
 	}
-	out = append(out, &model.CardHistoryEvent{
-		Timestamp: curr.UpdateAt,
-		UserID:    curr.ModifiedBy,
-		Kind:      kind,
-		BlockID:   curr.ID,
-		BlockType: string(curr.Type),
-		Before:    prev.Title,
-		After:     curr.Title,
-	})
+
 	return out
+}
+
+func stringField(b *model.Block, key string) string {
+	if b == nil || b.Fields == nil {
+		return ""
+	}
+	s, _ := b.Fields[key].(string)
+	return s
+}
+
+// subtaskStateLabel resolves an option id to a human-readable label using
+// the lookup pre-built from board.cardProperties[subtaskStatesPropertyId].
+// Returns "" for the unset state ("none picked yet"), and the raw id with
+// a "(removed)" suffix when an admin has dropped the option from the
+// property since the event was written.
+func subtaskStateLabel(optionID string, labels map[string]string) string {
+	if optionID == "" {
+		return ""
+	}
+	if label, ok := labels[optionID]; ok {
+		return label
+	}
+	return optionID + " (removed)"
 }
 
 func editKindFor(t model.BlockType) model.HistoryEventKind {
