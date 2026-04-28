@@ -5,15 +5,19 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mattermost/mattermost-plugin-boards/server/model"
 	"github.com/mattermost/mattermost-plugin-boards/server/utils"
+	"github.com/mattermost/mattermost/server/public/shared/mlog"
 )
 
 // toolHandler executes a single MCP tool. It receives the raw arguments
@@ -37,11 +41,23 @@ func (s *Server) buildTools() map[string]toolHandler {
 		s.toolGetCurrentUser(),
 		s.toolListMyBoards(),
 		s.toolGetBoardInfo(),
+		s.toolListBoardMembers(),
 		s.toolSearchCards(),
 		s.toolGetCardDetails(),
 		s.toolCreateCard(),
 		s.toolUpdateCard(),
+		s.toolBulkUpdateCards(),
+		s.toolDeleteCard(),
+		s.toolAddSubtask(),
+		s.toolUpdateSubtask(),
+		s.toolSetSubtaskStatus(),
+		s.toolDeleteSubtask(),
+		s.toolAddCheckbox(),
+		s.toolUpdateCheckbox(),
+		s.toolDeleteCheckbox(),
 		s.toolAddComment(),
+		s.toolUpdateComment(),
+		s.toolDeleteComment(),
 	}
 	out := make(map[string]toolHandler, len(entries))
 	for _, e := range entries {
@@ -196,41 +212,146 @@ func extractPersonIDs(raw interface{}) []string {
 // `{"from": <ms>, "to": <ms>}` (string-quoted in some pathways), so we try a
 // few shapes. Returns 0 when no usable from value is present.
 func extractDateMillis(raw interface{}) int64 {
+	from, _ := extractDateMillisRange(raw)
+	return from
+}
+
+// extractDateMillisRange parses a date / deadline property value and returns
+// both ends of the date range as unix-ms (`from`, `to`). Either or both may
+// be 0 when the corresponding bound is unset. Accepts the same shapes as
+// extractDateMillis — `{"from":...,"to":...}` JSON-encoded as string, the same
+// shape as a parsed map, a bare ms number, or ms-as-string.
+func extractDateMillisRange(raw interface{}) (int64, int64) {
 	if raw == nil {
-		return 0
+		return 0, 0
 	}
-	tryParse := func(s string) int64 {
+	parseString := func(s string) (int64, int64) {
 		if s == "" {
-			return 0
+			return 0, 0
 		}
 		if strings.HasPrefix(s, "{") {
 			var d struct {
 				From int64 `json:"from"`
+				To   int64 `json:"to"`
 			}
 			if err := json.Unmarshal([]byte(s), &d); err == nil {
-				return d.From
+				return d.From, d.To
 			}
 		}
-		// Plain numeric millis encoded as string.
 		var ms int64
 		if _, err := fmt.Sscanf(s, "%d", &ms); err == nil {
-			return ms
+			return ms, 0
 		}
-		return 0
+		return 0, 0
 	}
 	switch v := raw.(type) {
 	case string:
-		return tryParse(v)
+		return parseString(v)
 	case float64:
+		return int64(v), 0
+	case int64:
+		return v, 0
+	case map[string]interface{}:
+		var from, to int64
+		switch f := v["from"].(type) {
+		case float64:
+			from = int64(f)
+		case int64:
+			from = f
+		}
+		switch t := v["to"].(type) {
+		case float64:
+			to = int64(t)
+		case int64:
+			to = t
+		}
+		return from, to
+	}
+	return 0, 0
+}
+
+// extractStringArray turns a property value into a string slice. Multi-select /
+// multi-person values are stored either as a real []string, a []interface{}
+// of strings, or a JSON-stringified array. Returns nil for empty / unparseable.
+func extractStringArray(raw interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case string:
+		if v == "" {
+			return nil
+		}
+		if strings.HasPrefix(v, "[") {
+			var arr []string
+			if err := json.Unmarshal([]byte(v), &arr); err == nil {
+				return arr
+			}
+		}
+		return []string{v}
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			if s, ok := x.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// resolveNumber normalises a number-typed property value. Boards stores numbers
+// as either float64 (after JSON decode) or as a string the user typed. When
+// the value is integral we return int64 to keep the JSON output free of
+// gratuitous trailing zeros.
+func resolveNumber(raw interface{}) interface{} {
+	switch v := raw.(type) {
+	case float64:
+		if v == float64(int64(v)) {
+			return int64(v)
+		}
+		return v
+	case int:
 		return int64(v)
 	case int64:
 		return v
-	case map[string]interface{}:
-		if f, ok := v["from"].(float64); ok {
-			return int64(f)
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
 		}
+		var n float64
+		if _, err := fmt.Sscanf(v, "%f", &n); err == nil {
+			if n == float64(int64(n)) {
+				return int64(n)
+			}
+			return n
+		}
+		return v
 	}
-	return 0
+	return raw
+}
+
+// msDateOnlyISO renders a unix-ms timestamp as YYYY-MM-DD UTC. Returns empty
+// for zero / negative values.
+func msDateOnlyISO(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).UTC().Format("2006-01-02")
+}
+
+// cardLinkFor builds a webapp deep link to a card. Format mirrors the URL the
+// frontend constructs in CardActionsMenu — caller (the agent) typically
+// concatenates this with the Mattermost base URL to give the user a clickable
+// link.
+func cardLinkFor(b *model.Board, cardID string) string {
+	if b == nil || cardID == "" {
+		return ""
+	}
+	return fmt.Sprintf("/boards/team/%s/%s/0/%s", b.TeamID, b.ID, cardID)
 }
 
 // propTemplate is a Boards card-property schema entry. The on-disk shape is
@@ -276,17 +397,74 @@ func resolveOptionLabel(raw interface{}, prop propTemplate) string {
 }
 
 // findOptionIDByLabel looks up the option id for a select property given a
-// case-insensitive label match. Returns "" when nothing matches; lets the
-// tools accept human labels ("In Progress") instead of opaque ids in
-// arguments like status / priority.
+// progressively looser match. Order of attempts:
+//
+//  1. exact case-sensitive match against optionValue
+//  2. exact case-insensitive match
+//  3. normalized match: lowercase, trim, strip leading "1. " / "12. "
+//     numeric prefix, and drop emoji / symbol characters
+//
+// Returns "" when nothing matches; lets the tools accept human labels
+// ("In Progress", "high", "Medium 🔶", "1. High 🔥") in arguments without
+// forcing the agent to reproduce the exact label including emoji decoration.
 func findOptionIDByLabel(prop propTemplate, label string) string {
+	if strings.TrimSpace(label) == "" {
+		return ""
+	}
+	for _, opt := range prop.options() {
+		if optionValue(opt) == label {
+			return optionID(opt)
+		}
+	}
 	target := strings.ToLower(strings.TrimSpace(label))
 	for _, opt := range prop.options() {
-		if strings.EqualFold(optionValue(opt), target) {
+		if strings.ToLower(optionValue(opt)) == target {
+			return optionID(opt)
+		}
+	}
+	targetNorm := normalizeOptionLabel(label)
+	if targetNorm == "" {
+		return ""
+	}
+	for _, opt := range prop.options() {
+		if normalizeOptionLabel(optionValue(opt)) == targetNorm {
 			return optionID(opt)
 		}
 	}
 	return ""
+}
+
+// optionLabelPrefixRE matches a leading numeric ranking prefix used in many
+// option labels ("1. High", "12. ToDo"). normalizeOptionLabel strips it so
+// callers can pass either form.
+var optionLabelPrefixRE = regexp.MustCompile(`^\d+\.\s+`)
+
+// normalizeOptionLabel reduces a label to a comparable canonical form:
+// lowercase, no leading numeric prefix, no emoji / symbol characters. Cyrillic
+// / CJK / accented letters are preserved (only Unicode Symbol categories are
+// dropped). Whitespace is collapsed to single spaces.
+func normalizeOptionLabel(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = optionLabelPrefixRE.ReplaceAllString(s, "")
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			b.WriteRune(r)
+			prevSpace = false
+		case unicode.IsSpace(r):
+			if !prevSpace {
+				b.WriteRune(' ')
+				prevSpace = true
+			}
+		case r == '-' || r == '_' || r == '/' || r == '.' || r == ',':
+			b.WriteRune(r)
+			prevSpace = false
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // boardProperties returns the typed view of a board's card-property templates.
@@ -388,7 +566,7 @@ func (s *Server) toolGetCurrentUser() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "get_current_user",
-			Description: "Returns identity info for the user this MCP session is running as: user_id, username, email, first/last name. Use this whenever you need to know who 'me' is — for example to display the user's name, to address them, or when another tool requires a username instead of the \"me\" sentinel. You usually do NOT need to call this for assigning cards: every Boards tool that takes assigned_to / assignee accepts the literal string \"me\", which is resolved server-side to the calling user's id.",
+			Description: "Returns identity info for the user this MCP session is running as: user_id, username, email, plus first_name / last_name / nickname when those are populated in Mattermost (omitted when empty). Use this when you need to know who \"me\" is — to display the user's name, to address them, or when another tool requires a username. You do NOT need this for assigning cards: every tool that takes assigned_to / assignee accepts the literal string \"me\", which is resolved server-side to the calling user's id.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"properties": {}
@@ -416,24 +594,24 @@ func (s *Server) toolGetCurrentUser() toolEntry {
 // =====================================================================
 
 type boardSummary struct {
-	ID           string `json:"id"`
-	TeamID       string `json:"team_id"`
-	Title        string `json:"title"`
-	Description  string `json:"description,omitempty"`
-	Type         string `json:"type"`
-	Icon         string `json:"icon,omitempty"`
-	UpdateAt     int64  `json:"update_at"`
-	UpdateAtISO  string `json:"update_at_iso"`
-	IsTemplate   bool   `json:"is_template,omitempty"`
+	ID          string `json:"id"`
+	TeamID      string `json:"team_id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type"`
+	Icon        string `json:"icon,omitempty"`
+	UpdateAt    int64  `json:"update_at"`
+	UpdateAtISO string `json:"update_at_iso"`
+	IsTemplate  bool   `json:"is_template,omitempty"`
 }
 
 func summarizeBoard(b *model.Board) boardSummary {
 	return boardSummary{
 		ID:          b.ID,
 		TeamID:      b.TeamID,
-		Title:       b.Title,
+		Title:       strings.TrimSpace(b.Title),
 		Description: b.Description,
-		Type:        string(b.Type),
+		Type:        boardTypeLabel(string(b.Type)),
 		Icon:        b.Icon,
 		UpdateAt:    b.UpdateAt,
 		UpdateAtISO: msToISO(b.UpdateAt),
@@ -445,26 +623,37 @@ func (s *Server) toolListMyBoards() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "list_my_boards",
-			Description: "Returns all Focalboard boards that the current user has access to. Use this when the user asks about their boards, projects, or wants to find tasks but doesn't specify a particular board. Returns board ID, title, description, board type (team/personal), and last modified date for each board.",
+			Description: "Returns all Focalboard boards the current user has access to. Use this when the user asks about their boards / projects / tasks but doesn't specify a particular board. Each entry has id, title, description, type (\"team\" / \"personal\" / \"open\"), and last-modified timestamp. Template boards are hidden by default — pass include_templates=true to include them too.",
 			InputSchema: rawSchema(`{
 				"type": "object",
-				"properties": {}
+				"properties": {
+					"include_templates": {"type": "boolean", "description": "Also return template boards. Default false."}
+				}
 			}`),
 		},
-		handler: func(_ context.Context, userID string, _ json.RawMessage) (toolsCallResult, error) {
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				IncludeTemplates bool `json:"include_templates"`
+			}
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &args)
+			}
 			boards, err := s.boardsForUser(userID)
 			if err != nil {
 				return toolError("list boards: %v", err), nil
 			}
 			out := make([]boardSummary, 0, len(boards))
 			for _, b := range boards {
-				if b.IsTemplate {
+				if b.IsTemplate && !args.IncludeTemplates {
 					continue
 				}
 				out = append(out, summarizeBoard(b))
 			}
 			sort.Slice(out, func(i, j int) bool { return out[i].UpdateAt > out[j].UpdateAt })
-			return toolJSON(map[string]interface{}{"boards": out})
+			return toolJSON(map[string]interface{}{
+				"boards": out,
+				"count":  len(out),
+			})
 		},
 	}
 }
@@ -512,18 +701,19 @@ type boardPropertyOption struct {
 }
 
 type boardInfo struct {
-	ID           string                `json:"id"`
-	TeamID       string                `json:"team_id"`
-	Title        string                `json:"title"`
-	Description  string                `json:"description,omitempty"`
-	Type         string                `json:"type"`
-	Properties   []boardPropertySchema `json:"properties"`
-	StatusValues []string              `json:"status_values,omitempty"`
-	PriorityValues []string            `json:"priority_values,omitempty"`
-	DueDateProperty string             `json:"due_date_property,omitempty"`
-	AssigneeProperties []string        `json:"assignee_properties,omitempty"`
-	Members      []boardMemberSummary  `json:"members,omitempty"`
-	UpdateAt     int64                 `json:"update_at"`
+	ID                 string                `json:"id"`
+	TeamID             string                `json:"team_id"`
+	Title              string                `json:"title"`
+	Description        string                `json:"description,omitempty"`
+	Type               string                `json:"type"`
+	IsTemplate         bool                  `json:"is_template,omitempty"`
+	Properties         []boardPropertySchema `json:"properties"`
+	StatusValues       []string              `json:"status_values,omitempty"`
+	PriorityValues     []string              `json:"priority_values,omitempty"`
+	DueDateProperty    string                `json:"due_date_property,omitempty"`
+	AssigneeProperties []string              `json:"assignee_properties,omitempty"`
+	Members            []boardMemberSummary  `json:"members,omitempty"`
+	UpdateAt           int64                 `json:"update_at"`
 }
 
 type boardMemberSummary struct {
@@ -536,12 +726,12 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "get_board_info",
-			Description: "Returns metadata and schema for a specific board. This is essential to call BEFORE creating or modifying cards, because it tells you what status values are available (e.g., \"To Do\", \"In Progress\", \"Done\"), what custom fields exist, what priorities are allowed, and who the board members are. The board_id can be obtained from list_my_boards(). Always call this first if you plan to create or update cards on a board you haven't examined yet.",
+			Description: "Returns metadata and schema for a specific board: title, description, status / priority option values, all custom property templates, the resolved due-date / assignee property names, and the list of board members (user_id + username + role). Call this BEFORE creating or modifying cards on an unfamiliar board so you know what option labels are valid. Distinguishes \"not found\" (404) from \"permission denied\" (403) in error messages so the agent doesn't ask the user for access to a board that doesn't exist.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["board_id"],
 				"properties": {
-					"board_id": {"type": "string"}
+					"board_id": {"type": "string", "description": "Board id from list_my_boards()."}
 				}
 			}`),
 		},
@@ -555,19 +745,23 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 			if args.BoardID == "" {
 				return toolError("board_id is required"), nil
 			}
-			if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
-				return toolError("permission denied for board %s", args.BoardID), nil
-			}
+			// Order: existence check first, permission check second, so the
+			// agent gets the more specific error. Reading the board itself
+			// without permission is acceptable — we only surface metadata.
 			board, err := s.backend.GetBoard(args.BoardID)
 			if err != nil || board == nil {
-				return toolError("board not found: %s", args.BoardID), nil
+				return toolError("not found: board %s", args.BoardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
+				return toolError("permission denied: board %s", args.BoardID), nil
 			}
 			info := boardInfo{
 				ID:          board.ID,
 				TeamID:      board.TeamID,
-				Title:       board.Title,
+				Title:       strings.TrimSpace(board.Title),
 				Description: board.Description,
-				Type:        string(board.Type),
+				Type:        boardTypeLabel(string(board.Type)),
+				IsTemplate:  board.IsTemplate,
 				UpdateAt:    board.UpdateAt,
 			}
 			for _, p := range boardProperties(board) {
@@ -588,8 +782,6 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 					info.AssigneeProperties = append(info.AssigneeProperties, p.name())
 				}
 			}
-			// Surface status / priority option values up-front so the agent
-			// doesn't have to hunt through the property list.
 			if statusProp := findPropertyByName(board, "status"); statusProp != nil && statusProp.ptype() == propTypeSelect {
 				for _, opt := range statusProp.options() {
 					info.StatusValues = append(info.StatusValues, optionValue(opt))
@@ -603,9 +795,55 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 			if due := findDueDateProperty(board); due != nil {
 				info.DueDateProperty = due.name()
 			}
+			info.Members = s.boardMembersFor(board.ID)
 			return toolJSON(info)
 		},
 	}
+}
+
+// boardTypeLabel maps Boards' single-character board-type code to the
+// human-readable noun the spec exposes ("personal" / "team" / "open"). Falls
+// back to the raw code for unrecognised values so future additions still
+// surface to the agent.
+func boardTypeLabel(t string) string {
+	switch t {
+	case "P":
+		return "personal"
+	case "O":
+		return "open"
+	case "T":
+		return "team"
+	}
+	return t
+}
+
+// boardMembersFor enumerates the members of a board enriched with usernames.
+// Returns an empty slice on backend errors so the rest of the board info
+// still renders — membership listing is best-effort surface area.
+func (s *Server) boardMembersFor(boardID string) []boardMemberSummary {
+	members, err := s.backend.GetMembersForBoard(boardID)
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+	out := make([]boardMemberSummary, 0, len(members))
+	for _, m := range members {
+		role := "viewer"
+		switch {
+		case m.SchemeAdmin:
+			role = "admin"
+		case m.SchemeEditor:
+			role = "editor"
+		case m.SchemeCommenter:
+			role = "commenter"
+		}
+		out = append(out, boardMemberSummary{
+			UserID:   m.UserID,
+			Username: s.usernameFor(m.UserID),
+			Role:     role,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Username < out[j].Username })
+	return out
 }
 
 // =====================================================================
@@ -613,54 +851,160 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 // =====================================================================
 
 type searchCardsArgs struct {
-	BoardID      string `json:"board_id"`
-	TextQuery    string `json:"text_query"`
-	AssignedTo   string `json:"assigned_to"`
-	Status       string `json:"status"`
-	Priority     string `json:"priority"`
-	DueDateRange string `json:"due_date_range"`
-	HasSubtasks  *bool  `json:"has_subtasks"`
-	Limit        int    `json:"limit"`
+	BoardID              string `json:"board_id"`
+	TextQuery            string `json:"text_query"`
+	AssignedTo           string `json:"assigned_to"`
+	Status               string `json:"status"`
+	Priority             string `json:"priority"`
+	DueDateRange         string `json:"due_date_range"`
+	HasSubtasks          *bool  `json:"has_subtasks"`
+	Limit                int    `json:"limit"`
+	Cursor               string `json:"cursor"`
+	IncludeRawProperties bool   `json:"include_raw_properties"`
+	IncludeTemplates     bool   `json:"include_templates"`
+}
+
+// paginationCursor is the opaque payload encoded into the `cursor` field
+// returned in search responses. Today only an offset is needed; the JSON
+// shape leaves room to add board-/card-id keys later for stable resumption
+// across edits without breaking existing clients (unknown fields are ignored).
+type paginationCursor struct {
+	Offset int `json:"o"`
+}
+
+func encodeCursor(offset int) string {
+	if offset <= 0 {
+		return ""
+	}
+	b, _ := json.Marshal(paginationCursor{Offset: offset})
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+func decodeCursor(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	raw, err := base64.URLEncoding.DecodeString(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid cursor: %w", err)
+	}
+	var c paginationCursor
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return 0, fmt.Errorf("invalid cursor: %w", err)
+	}
+	if c.Offset < 0 {
+		return 0, errors.New("invalid cursor: negative offset")
+	}
+	return c.Offset, nil
+}
+
+// anyBoardHasSelectOption reports whether at least one board in the slice has
+// a select property of the given name with an option matching `label`
+// (fuzzy-matched via findOptionIDByLabel). Used to validate user-supplied
+// status / priority filters before they silently match nothing.
+func anyBoardHasSelectOption(boards []*model.Board, propName, label string) bool {
+	for _, b := range boards {
+		prop := findPropertyByName(b, propName)
+		if prop == nil || prop.ptype() != propTypeSelect {
+			continue
+		}
+		if findOptionIDByLabel(prop, label) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// collectSelectOptionLabels returns the deduplicated list of option labels
+// across every board's named select property. Used to populate validation
+// error messages so the agent can self-correct.
+func collectSelectOptionLabels(boards []*model.Board, propName string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, b := range boards {
+		prop := findPropertyByName(b, propName)
+		if prop == nil || prop.ptype() != propTypeSelect {
+			continue
+		}
+		for _, opt := range prop.options() {
+			v := optionValue(opt)
+			if v != "" && !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// assigneeRef is the JSON shape used wherever a tool returns a Mattermost
+// user reference: a stable id plus the human-readable username so the agent
+// can render the value without an extra users/get round-trip.
+type assigneeRef struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username,omitempty"`
+}
+
+// dateRange is the resolved form of a date / deadline property — both ends in
+// ISO YYYY-MM-DD. `to` is omitted when only a single date was set.
+type dateRange struct {
+	From string `json:"from"`
+	To   string `json:"to,omitempty"`
 }
 
 // cardSummary is a search-result row: card identity, title, key properties
 // resolved to human labels, and the parent board id so the agent can fetch
 // the full board context if needed.
 //
-// Status / Priority / DueDate / Assignees are deliberately serialised even
-// when empty (no `omitempty`) so every result row has a uniform shape — an
-// MCP client that scans for "the status field is missing" wouldn't end up
-// silently dropping cards that simply don't have a status set yet.
+// Status / Priority / DueDate are pointers so unset values render as JSON
+// `null` rather than `""` — that lets agents distinguish "field unset" from
+// "field cleared to empty string". Assignees is always serialised (`[]` when
+// empty, never `null`) so result rows have a uniform shape.
+//
+// Properties is the resolved map keyed by property name (so the agent doesn't
+// need to call get_board_info first to translate ids). Pass
+// include_raw_properties=true on the tool call to also receive the raw
+// id-keyed map under properties_raw.
 type cardSummary struct {
-	ID         string                 `json:"id"`
-	BoardID    string                 `json:"board_id"`
-	BoardTitle string                 `json:"board_title"`
-	Title      string                 `json:"title"`
-	Status     string                 `json:"status"`
-	Priority   string                 `json:"priority"`
-	Assignees  []string               `json:"assignees"`
-	DueDate    string                 `json:"due_date"`
-	UpdateAt   int64                  `json:"update_at"`
-	UpdateISO  string                 `json:"update_iso"`
-	Properties map[string]interface{} `json:"properties"`
+	ID            string                 `json:"id"`
+	BoardID       string                 `json:"board_id"`
+	BoardTitle    string                 `json:"board_title"`
+	Title         string                 `json:"title"`
+	Status        *string                `json:"status"`
+	Priority      *string                `json:"priority"`
+	Assignees     []assigneeRef          `json:"assignees"`
+	DueDate       *string                `json:"due_date"`
+	CardLink      string                 `json:"card_link"`
+	CreatedBy     *assigneeRef           `json:"created_by,omitempty"`
+	ModifiedBy    *assigneeRef           `json:"modified_by,omitempty"`
+	CreateAt      int64                  `json:"create_at,omitempty"`
+	CreateISO     string                 `json:"create_iso,omitempty"`
+	UpdateAt      int64                  `json:"update_at"`
+	UpdateISO     string                 `json:"update_iso"`
+	Properties    map[string]interface{} `json:"properties"`
+	PropertiesRaw map[string]interface{} `json:"properties_raw,omitempty"`
 }
 
 func (s *Server) toolSearchCards() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "search_cards",
-			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default ALL cards on the matched board(s) are returned, including cards that have no status, priority, due date or assignee set yet — those fields just come back as empty strings. Pass status / priority / assigned_to / due_date_range to narrow the result. assigned_to accepts \"me\" (the calling user), a username, \"any\" (team-wide), or \"unassigned\". due_date_range: \"overdue\" / \"today\" / \"this_week\" / \"next_week\" / \"YYYY-MM-DD..YYYY-MM-DD\". status and priority match case-insensitively against any select-property option label.",
+			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default every card on the matched board(s) is returned, including cards with no status / priority / due date / assignee set — those fields come back as JSON null and `assignees` is `[]`. Status and priority match fuzzily: case-insensitive, with leading numeric prefixes (\"1. \") and trailing emoji decoration stripped, so passing \"high\" matches an option labelled \"1. High 🔥\". Properties are returned resolved by name (e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}); pass include_raw_properties=true to also receive the raw id-keyed map. text_query is a case-insensitive substring match over the card title. Use the `cursor` returned in the response to paginate large result sets.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"properties": {
-					"board_id":       {"type": "string", "description": "Optional. Restrict to a single board; omit to search across every board the user can access."},
-					"text_query":     {"type": "string"},
-					"assigned_to":    {"type": "string", "description": "\"me\", a username, \"any\", or \"unassigned\"."},
-					"status":         {"type": "string"},
-					"priority":       {"type": "string"},
-					"due_date_range": {"type": "string", "description": "\"overdue\", \"today\", \"this_week\", \"next_week\", or YYYY-MM-DD..YYYY-MM-DD."},
-					"has_subtasks":   {"type": "boolean"},
-					"limit":          {"type": "integer", "minimum": 1, "maximum": 500, "description": "Max results. Default 50."}
+					"board_id":               {"type": "string", "description": "Optional. Restrict to a single board; omit to search across every board the user can access."},
+					"text_query":             {"type": "string", "description": "Case-insensitive substring match over the card title."},
+					"assigned_to":            {"type": "string", "description": "\"me\" (caller), a Mattermost username, \"any\" (matches any card with at least one assignee set), or \"unassigned\" (no assignees)."},
+					"status":                 {"type": "string", "description": "Status option label. Fuzzy: case-insensitive, leading \"1. \" / numeric prefix and emoji are ignored."},
+					"priority":               {"type": "string", "description": "Priority option label. Same fuzzy matching rules as status."},
+					"due_date_range":         {"type": "string", "description": "\"overdue\" (any due date < now), \"today\", \"this_week\", \"next_week\", or YYYY-MM-DD..YYYY-MM-DD (inclusive on both ends)."},
+					"has_subtasks":           {"type": "boolean", "description": "Filter to cards that do (true) / don't (false) have at least one subtask block. Omit to skip the filter."},
+					"limit":                  {"type": "integer", "minimum": 1, "maximum": 500, "description": "Page size. Default 50."},
+					"cursor":                 {"type": "string", "description": "Opaque pagination cursor copied from a previous response's next_cursor. Omit on the first call."},
+					"include_raw_properties": {"type": "boolean", "description": "Also return the raw id-keyed property map under properties_raw on each card. Default false."},
+					"include_templates":      {"type": "boolean", "description": "Also include template boards (normally hidden). Default false."}
 				}
 			}`),
 		},
@@ -673,21 +1017,25 @@ func (s *Server) toolSearchCards() toolEntry {
 			}
 			limit := args.Limit
 			if limit <= 0 {
-				limit = 200
+				limit = 50
 			}
-			if limit > 1000 {
-				limit = 1000
+			if limit > 500 {
+				limit = 500
+			}
+			offset, err := decodeCursor(args.Cursor)
+			if err != nil {
+				return toolError("%v", err), nil
 			}
 
 			// Determine which boards to search.
 			var targetBoards []*model.Board
 			if args.BoardID != "" {
-				if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
-					return toolError("permission denied for board %s", args.BoardID), nil
-				}
 				b, err := s.backend.GetBoard(args.BoardID)
 				if err != nil || b == nil {
-					return toolError("board not found: %s", args.BoardID), nil
+					return toolError("not found: board %s", args.BoardID), nil
+				}
+				if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
+					return toolError("permission denied: board %s", args.BoardID), nil
 				}
 				targetBoards = []*model.Board{b}
 			} else {
@@ -696,10 +1044,37 @@ func (s *Server) toolSearchCards() toolEntry {
 					return toolError("list boards: %v", err), nil
 				}
 				for _, b := range bs {
-					if !b.IsTemplate {
-						targetBoards = append(targetBoards, b)
+					if b.IsTemplate && !args.IncludeTemplates {
+						continue
 					}
+					targetBoards = append(targetBoards, b)
 				}
+			}
+			if len(targetBoards) == 0 {
+				return toolJSON(map[string]interface{}{
+					"cards":       []cardSummary{},
+					"count":       0,
+					"total":       0,
+					"limit":       limit,
+					"next_cursor": "",
+				})
+			}
+
+			// Validate select-typed filters before scanning so a typo doesn't
+			// silently come back as zero matches.
+			if args.Status != "" && !anyBoardHasSelectOption(targetBoards, "status", args.Status) {
+				opts := collectSelectOptionLabels(targetBoards, "status")
+				if len(opts) == 0 {
+					return toolError("status %q rejected: none of the target boards have a Status select property", args.Status), nil
+				}
+				return toolError("status %q not in {%s}", args.Status, strings.Join(opts, ", ")), nil
+			}
+			if args.Priority != "" && !anyBoardHasSelectOption(targetBoards, "priority", args.Priority) {
+				opts := collectSelectOptionLabels(targetBoards, "priority")
+				if len(opts) == 0 {
+					return toolError("priority %q rejected: none of the target boards have a Priority select property", args.Priority), nil
+				}
+				return toolError("priority %q not in {%s}", args.Priority, strings.Join(opts, ", ")), nil
 			}
 
 			// Resolve assignee filter once.
@@ -714,9 +1089,13 @@ func (s *Server) toolSearchCards() toolEntry {
 				return toolError("invalid due_date_range: %v", dueErr), nil
 			}
 
-			results := make([]cardSummary, 0, limit)
+			// Collect matches across boards. Sort by UpdateAt DESC, then apply
+			// cursor offset and limit. Hard cap to prevent runaway memory if
+			// the agent omits all filters on a huge install.
+			const matchHardCap = 5000
+			matches := make([]cardSummary, 0, limit*2)
 			for _, board := range targetBoards {
-				if len(results) >= limit {
+				if len(matches) >= matchHardCap {
 					break
 				}
 				cards, cerr := s.backend.GetCardsForBoard(board.ID, 0, 1000)
@@ -724,20 +1103,42 @@ func (s *Server) toolSearchCards() toolEntry {
 					continue
 				}
 				for _, card := range cards {
-					if len(results) >= limit {
+					if len(matches) >= matchHardCap {
 						break
 					}
 					if !cardMatches(card, board, args, assigneeFilter, dueFrom, dueTo, s.backend) {
 						continue
 					}
-					results = append(results, cardSummaryFor(card, board))
+					matches = append(matches, s.cardSummaryFor(card, board, args.IncludeRawProperties))
 				}
 			}
-			sort.Slice(results, func(i, j int) bool { return results[i].UpdateAt > results[j].UpdateAt })
+			sort.Slice(matches, func(i, j int) bool { return matches[i].UpdateAt > matches[j].UpdateAt })
+
+			total := len(matches)
+			if offset >= total {
+				return toolJSON(map[string]interface{}{
+					"cards":       []cardSummary{},
+					"count":       0,
+					"total":       total,
+					"limit":       limit,
+					"next_cursor": "",
+				})
+			}
+			end := offset + limit
+			if end > total {
+				end = total
+			}
+			page := matches[offset:end]
+			next := ""
+			if end < total {
+				next = encodeCursor(end)
+			}
 			return toolJSON(map[string]interface{}{
-				"cards": results,
-				"count": len(results),
-				"limit": limit,
+				"cards":       page,
+				"count":       len(page),
+				"total":       total,
+				"limit":       limit,
+				"next_cursor": next,
 			})
 		},
 	}
@@ -851,30 +1252,28 @@ func cardMatchesAssignee(card *model.Card, board *model.Board, raw, resolved str
 }
 
 // cardMatchesSelect checks whether the card's named select-property value
-// matches the requested label, case-insensitively. Boards with no such
-// property never match (no row to filter on).
+// matches the requested label using fuzzy matching (lowercase, leading "1. "
+// numeric prefix and emoji decoration both ignored — see findOptionIDByLabel
+// for the full ordering of attempts). Boards with no such property never
+// match (no row to filter on).
 func cardMatchesSelect(card *model.Card, board *model.Board, propName, label string) bool {
 	prop := findPropertyByName(board, propName)
 	if prop == nil || prop.ptype() != propTypeSelect {
 		return false
 	}
-	rawID, ok := card.Properties[prop.id()].(string)
-	if !ok || rawID == "" {
+	targetID := findOptionIDByLabel(prop, label)
+	if targetID == "" {
 		return false
 	}
-	for _, opt := range prop.options() {
-		if optionID(opt) == rawID && strings.EqualFold(optionValue(opt), label) {
-			return true
-		}
-	}
-	return false
+	rawID, _ := card.Properties[prop.id()].(string)
+	return rawID == targetID
 }
 
 // cardHasSubtasks checks whether the card has at least one persisted child
-// block of type=subtasks. Boards' subtasks block is stored as a content
-// block under the card; presence of any block of that type counts.
+// block of type=subtask. Boards stores each subtask as its own block parented
+// to the card.
 func cardHasSubtasks(card *model.Card, _ *model.Board, backend Backend) (bool, error) {
-	blocks, err := backend.GetBlocks(card.BoardID, card.ID, "subtasks")
+	blocks, err := backend.GetBlocks(card.BoardID, card.ID, "subtask")
 	if err != nil {
 		return false, err
 	}
@@ -935,36 +1334,181 @@ func parseDueDateRange(raw string) (int64, int64, error) {
 	return 0, 0, fmt.Errorf("unknown range %q (try overdue / today / this_week / next_week / YYYY-MM-DD..YYYY-MM-DD)", raw)
 }
 
-func cardSummaryFor(card *model.Card, board *model.Board) cardSummary {
-	props := card.Properties
-	if props == nil {
-		props = map[string]interface{}{}
+// cardSummaryFor projects a backend Card onto the MCP-facing cardSummary,
+// resolving every property template into a human-readable form.
+//
+// Resolution rules per template type:
+//
+//   - select          -> option label string ("In Progress")
+//   - multiSelect     -> []string of option labels
+//   - person*         -> assigneeRef ({user_id, username})
+//   - multiPerson*    -> []assigneeRef
+//   - date / deadline -> dateRange ({from: "YYYY-MM-DD", to: ...})
+//   - createdTime / updatedTime -> ISO timestamp string
+//   - number          -> int64 / float64 (integral values stay int)
+//   - others          -> raw value passed through (text / email / phone / url / checkbox)
+//
+// Stale property ids that no longer match any board template are dropped from
+// the resolved map but preserved under properties_raw when includeRaw=true.
+func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw bool) cardSummary {
+	rawProps := card.Properties
+	if rawProps == nil {
+		rawProps = map[string]interface{}{}
 	}
+
+	templatesByID := make(map[string]propTemplate, len(board.CardProperties))
+	for _, p := range boardProperties(board) {
+		templatesByID[p.id()] = p
+	}
+
+	resolved := map[string]interface{}{}
+	for id, val := range rawProps {
+		prop, ok := templatesByID[id]
+		if !ok {
+			continue
+		}
+		if v := s.resolvePropertyValue(val, prop); v != nil {
+			resolved[prop.name()] = v
+		}
+	}
+
 	out := cardSummary{
 		ID:         card.ID,
 		BoardID:    card.BoardID,
-		BoardTitle: board.Title,
-		Title:      card.Title,
-		Assignees:  []string{}, // never nil — see cardSummary docstring
+		BoardTitle: strings.TrimSpace(board.Title),
+		Title:      strings.TrimSpace(card.Title),
+		Assignees:  []assigneeRef{},
+		CardLink:   cardLinkFor(board, card.ID),
+		CreateAt:   card.CreateAt,
+		CreateISO:  msToISO(card.CreateAt),
 		UpdateAt:   card.UpdateAt,
 		UpdateISO:  msToISO(card.UpdateAt),
-		Properties: props,
+		Properties: resolved,
 	}
+	if includeRaw {
+		rawCopy := make(map[string]interface{}, len(rawProps))
+		for k, v := range rawProps {
+			rawCopy[k] = v
+		}
+		out.PropertiesRaw = rawCopy
+	}
+
 	if statusProp := findPropertyByName(board, "status"); statusProp != nil {
-		out.Status = resolveOptionLabel(card.Properties[statusProp.id()], statusProp)
-	}
-	if priorityProp := findPropertyByName(board, "priority"); priorityProp != nil {
-		out.Priority = resolveOptionLabel(card.Properties[priorityProp.id()], priorityProp)
-	}
-	if due := findDueDateProperty(board); due != nil {
-		if ms := extractDateMillis(card.Properties[due.id()]); ms > 0 {
-			out.DueDate = msToISO(ms)
+		if label := resolveOptionLabel(rawProps[statusProp.id()], statusProp); label != "" {
+			out.Status = &label
 		}
 	}
+	if priorityProp := findPropertyByName(board, "priority"); priorityProp != nil {
+		if label := resolveOptionLabel(rawProps[priorityProp.id()], priorityProp); label != "" {
+			out.Priority = &label
+		}
+	}
+	if due := findDueDateProperty(board); due != nil {
+		if ms := extractDateMillis(rawProps[due.id()]); ms > 0 {
+			iso := msDateOnlyISO(ms)
+			out.DueDate = &iso
+		}
+	}
+	seen := map[string]bool{}
 	for _, p := range findPersonProperties(board) {
-		out.Assignees = append(out.Assignees, extractPersonIDs(card.Properties[p.id()])...)
+		for _, id := range extractPersonIDs(rawProps[p.id()]) {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			out.Assignees = append(out.Assignees, s.assigneeRefFor(id))
+		}
+	}
+	if card.CreatedBy != "" {
+		ref := s.assigneeRefFor(card.CreatedBy)
+		out.CreatedBy = &ref
+	}
+	if card.ModifiedBy != "" && card.ModifiedBy != card.CreatedBy {
+		ref := s.assigneeRefFor(card.ModifiedBy)
+		out.ModifiedBy = &ref
 	}
 	return out
+}
+
+// resolvePropertyValue maps one stored property value onto its human-readable
+// resolved form. See cardSummaryFor for the per-type rules.
+func (s *Server) resolvePropertyValue(raw interface{}, prop propTemplate) interface{} {
+	if raw == nil {
+		return nil
+	}
+	switch prop.ptype() {
+	case propTypeSelect:
+		id, ok := raw.(string)
+		if !ok || id == "" {
+			return nil
+		}
+		for _, opt := range prop.options() {
+			if optionID(opt) == id {
+				return optionValue(opt)
+			}
+		}
+		return id
+	case propTypeMultiSelect:
+		ids := extractStringArray(raw)
+		if len(ids) == 0 {
+			return nil
+		}
+		labels := make([]string, 0, len(ids))
+		for _, id := range ids {
+			label := id
+			for _, opt := range prop.options() {
+				if optionID(opt) == id {
+					label = optionValue(opt)
+					break
+				}
+			}
+			labels = append(labels, label)
+		}
+		return labels
+	case propTypePerson, propTypePersonNotify:
+		id, ok := raw.(string)
+		if !ok || id == "" {
+			return nil
+		}
+		ref := s.assigneeRefFor(id)
+		return ref
+	case propTypeMultiPerson, propTypeMultiPersonNotify:
+		ids := extractPersonIDs(raw)
+		if len(ids) == 0 {
+			return nil
+		}
+		out := make([]assigneeRef, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, s.assigneeRefFor(id))
+		}
+		return out
+	case propTypeDate, propTypeDeadline:
+		from, to := extractDateMillisRange(raw)
+		if from == 0 && to == 0 {
+			return nil
+		}
+		out := dateRange{From: msDateOnlyISO(from)}
+		if to != 0 {
+			out.To = msDateOnlyISO(to)
+		}
+		return out
+	case propTypeCreatedTime, propTypeUpdatedTime:
+		if ms := extractDateMillis(raw); ms > 0 {
+			return msToISO(ms)
+		}
+		return nil
+	case propTypeNumber:
+		return resolveNumber(raw)
+	default:
+		return raw
+	}
+}
+
+// assigneeRefFor wraps a userID with its current username via the plugin API.
+// Falls back to an empty username when the user is missing / inaccessible —
+// callers always get a non-empty user_id to work with.
+func (s *Server) assigneeRefFor(userID string) assigneeRef {
+	return assigneeRef{UserID: userID, Username: s.usernameFor(userID)}
 }
 
 // =====================================================================
@@ -973,20 +1517,43 @@ func cardSummaryFor(card *model.Card, board *model.Board) cardSummary {
 
 type cardDetail struct {
 	cardSummary
-	Description string             `json:"description,omitempty"`
-	Comments    []cardComment      `json:"comments,omitempty"`
-	Subtasks    []map[string]interface{} `json:"subtasks,omitempty"`
-	ContentOrder []string          `json:"content_order,omitempty"`
-	CreatedBy   string             `json:"created_by,omitempty"`
-	CreateAt    int64              `json:"create_at,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Comments     []cardComment  `json:"comments,omitempty"`
+	Subtasks     []cardSubtask  `json:"subtasks,omitempty"`
+	Checkboxes   []cardCheckbox `json:"checkboxes,omitempty"`
+	ContentOrder []string       `json:"content_order,omitempty"`
+}
+
+// cardCheckbox is the resolved view of a Boards "checkbox" content block — a
+// simple inline todo in the card body (text + checked flag). Distinct from a
+// "checkbox" property template, which is a board-level column on the card.
+type cardCheckbox struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Checked   bool   `json:"checked"`
+	CreateAt  int64  `json:"create_at,omitempty"`
+	CreateISO string `json:"create_iso,omitempty"`
+}
+
+// cardSubtask is the resolved view of a Boards "subtask" content block.
+// Boards stores the subtask state as fields.optionId, an option id of the
+// board's subtaskStatesPropertyId-pointed select property; we resolve it to a
+// human label when possible.
+type cardSubtask struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status,omitempty"`
+	OptionID  string `json:"option_id,omitempty"`
+	CreateAt  int64  `json:"create_at,omitempty"`
+	CreateISO string `json:"create_iso,omitempty"`
 }
 
 type cardComment struct {
-	ID       string `json:"id"`
-	UserID   string `json:"user_id"`
-	Username string `json:"username,omitempty"`
-	Text     string `json:"text"`
-	CreateAt int64  `json:"create_at"`
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	Username  string `json:"username,omitempty"`
+	Text      string `json:"text"`
+	CreateAt  int64  `json:"create_at"`
 	CreateISO string `json:"create_iso"`
 }
 
@@ -994,18 +1561,20 @@ func (s *Server) toolGetCardDetails() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "get_card_details",
-			Description: "Returns full information about a card: title, description text (markdown), status, priority, due date, assignees, all custom properties, comments (with author + timestamp), subtask blocks, and metadata. Use the card_id obtained from search_cards() results.",
+			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, status), and metadata. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id"],
 				"properties": {
-					"card_id": {"type": "string"}
+					"card_id": {"type": "string", "description": "Card id from search_cards()."},
+					"include_raw_properties": {"type": "boolean", "description": "Also return the raw id-keyed property map under properties_raw. Default false."}
 				}
 			}`),
 		},
 		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
 			var args struct {
-				CardID string `json:"card_id"`
+				CardID               string `json:"card_id"`
+				IncludeRawProperties bool   `json:"include_raw_properties"`
 			}
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return toolError("invalid arguments: %v", err), nil
@@ -1015,26 +1584,26 @@ func (s *Server) toolGetCardDetails() toolEntry {
 			}
 			card, err := s.backend.GetCardByID(args.CardID)
 			if err != nil || card == nil {
-				return toolError("card not found: %s", args.CardID), nil
+				return toolError("not found: card %s", args.CardID), nil
 			}
 			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionViewBoard) {
-				return toolError("permission denied"), nil
+				return toolError("permission denied: card %s", args.CardID), nil
 			}
 			board, err := s.backend.GetBoard(card.BoardID)
 			if err != nil || board == nil {
-				return toolError("parent board missing"), nil
+				return toolError("not found: parent board %s", card.BoardID), nil
 			}
 
 			detail := cardDetail{
-				cardSummary:  cardSummaryFor(card, board),
+				cardSummary:  s.cardSummaryFor(card, board, args.IncludeRawProperties),
 				ContentOrder: card.ContentOrder,
-				CreatedBy:    card.CreatedBy,
-				CreateAt:     card.CreateAt,
 			}
 
 			// Pull all blocks parented to the card. Description is
 			// concatenated text content; comments and subtasks are
-			// surfaced separately.
+			// surfaced separately. Subtask blocks are stored as type=subtask
+			// (singular) — the type plural would silently miss them.
+			subtaskStateProp := boardSubtaskStateProperty(board)
 			contentBlocks, _ := s.backend.GetBlocks(card.BoardID, card.ID, "")
 			var descParts []string
 			for _, b := range contentBlocks {
@@ -1052,12 +1621,27 @@ func (s *Server) toolGetCardDetails() toolEntry {
 						CreateAt:  b.CreateAt,
 						CreateISO: msToISO(b.CreateAt),
 					})
-				case "subtasks":
-					detail.Subtasks = append(detail.Subtasks, map[string]interface{}{
-						"id":     b.ID,
-						"title":  b.Title,
-						"fields": b.Fields,
-					})
+				case "subtask":
+					st := cardSubtask{
+						ID:        b.ID,
+						Title:     b.Title,
+						CreateAt:  b.CreateAt,
+						CreateISO: msToISO(b.CreateAt),
+					}
+					if optID, _ := b.Fields["optionId"].(string); optID != "" {
+						st.OptionID = optID
+						if subtaskStateProp != nil {
+							for _, opt := range subtaskStateProp.options() {
+								if optionID(opt) == optID {
+									st.Status = optionValue(opt)
+									break
+								}
+							}
+						}
+					}
+					detail.Subtasks = append(detail.Subtasks, st)
+				case "checkbox":
+					detail.Checkboxes = append(detail.Checkboxes, checkboxFromBlock(b))
 				}
 			}
 			detail.Description = strings.Join(descParts, "\n\n")
@@ -1067,6 +1651,25 @@ func (s *Server) toolGetCardDetails() toolEntry {
 			return toolJSON(detail)
 		},
 	}
+}
+
+// boardSubtaskStateProperty returns the select-property template used to label
+// subtask states on this board, or nil when the board has no
+// subtaskStatesPropertyId field configured.
+func boardSubtaskStateProperty(board *model.Board) propTemplate {
+	if board == nil || board.Properties == nil {
+		return nil
+	}
+	id, _ := board.Properties["subtaskStatesPropertyId"].(string)
+	if id == "" {
+		return nil
+	}
+	for _, p := range boardProperties(board) {
+		if p.id() == id {
+			return p
+		}
+	}
+	return nil
 }
 
 func (s *Server) usernameFor(userID string) string {
@@ -1100,20 +1703,20 @@ func (s *Server) toolCreateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "create_card",
-			Description: "Creates a new card on a board. Title is required. assigned_to accepts the literal \"me\" (the user calling this tool, no need to ask them for an id) or a Mattermost username. status / priority / due_date are convenience shortcuts mapped onto the board's actual property templates (Person*, Status select, Priority select, Deadline / Date) — call get_board_info() first if you don't know what's available. Pass `properties` for any field you need to set explicitly by id.",
+			Description: "Creates a new card on a board. Title is required. assigned_to accepts the literal \"me\" (the user calling this tool — never ask them for their id) or a Mattermost username. status / priority / due_date are convenience shortcuts mapped onto the board's actual property templates (Person*, Status select, Priority select, Deadline / Date). status and priority match fuzzily — case-insensitive, with leading numeric prefixes and emojis stripped. Pass `properties` for any custom field you need to set explicitly by id. Returns the created card in the same shape as get_card_details() — title, status, priority, assignees, due_date, resolved properties, card_link — so you don't need a follow-up read.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["board_id", "title"],
 				"properties": {
-					"board_id":       {"type": "string"},
-					"title":          {"type": "string"},
-					"description":    {"type": "string"},
-					"assigned_to":    {"type": "string", "description": "\"me\", a username, or empty."},
-					"status":         {"type": "string"},
-					"priority":       {"type": "string"},
+					"board_id":       {"type": "string", "description": "Board id from list_my_boards()."},
+					"title":          {"type": "string", "description": "Card title (will be trimmed of surrounding whitespace)."},
+					"description":    {"type": "string", "description": "Markdown body. Stored as a single text content block."},
+					"assigned_to":    {"type": "string", "description": "\"me\", a Mattermost username, or empty."},
+					"status":         {"type": "string", "description": "Status option label (fuzzy)."},
+					"priority":       {"type": "string", "description": "Priority option label (fuzzy)."},
 					"due_date":       {"type": "string", "description": "YYYY-MM-DD."},
-					"parent_card_id": {"type": "string"},
-					"properties":     {"type": "object"}
+					"parent_card_id": {"type": "string", "description": "Reserved for future card-hierarchy support; ignored today."},
+					"properties":     {"type": "object", "description": "Raw property values keyed by property id (use get_board_info() to discover ids)."}
 				}
 			}`),
 		},
@@ -1122,15 +1725,15 @@ func (s *Server) toolCreateCard() toolEntry {
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return toolError("invalid arguments: %v", err), nil
 			}
-			if args.BoardID == "" || args.Title == "" {
+			if args.BoardID == "" || strings.TrimSpace(args.Title) == "" {
 				return toolError("board_id and title are required"), nil
-			}
-			if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionManageBoardCards) {
-				return toolError("permission denied to create cards on board %s", args.BoardID), nil
 			}
 			board, err := s.backend.GetBoard(args.BoardID)
 			if err != nil || board == nil {
-				return toolError("board not found: %s", args.BoardID), nil
+				return toolError("not found: board %s", args.BoardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot create cards on board %s", args.BoardID), nil
 			}
 
 			properties := map[string]interface{}{}
@@ -1142,7 +1745,7 @@ func (s *Server) toolCreateCard() toolEntry {
 			}
 
 			card := &model.Card{
-				Title:        args.Title,
+				Title:        strings.TrimSpace(args.Title),
 				Properties:   properties,
 				ContentOrder: []string{},
 			}
@@ -1158,7 +1761,7 @@ func (s *Server) toolCreateCard() toolEntry {
 			}
 
 			// Description: write a single text content block as the card body.
-			if args.Description != "" {
+			if strings.TrimSpace(args.Description) != "" {
 				descBlock := &model.Block{
 					ID:       utils.NewID(utils.IDTypeBlock),
 					BoardID:  args.BoardID,
@@ -1169,11 +1772,13 @@ func (s *Server) toolCreateCard() toolEntry {
 				_ = s.backend.InsertBlockAndNotify(descBlock, userID, false)
 			}
 
-			return toolJSON(map[string]interface{}{
-				"card":      created,
-				"board_id":  args.BoardID,
-				"card_link": fmt.Sprintf("/boards/team/%s/%s/0/%s", board.TeamID, args.BoardID, created.ID),
-			})
+			// Re-read the card so the response reflects any defaults the
+			// backend filled in (CreateAt, UpdateAt, etc).
+			persisted, err := s.backend.GetCardByID(created.ID)
+			if err != nil || persisted == nil {
+				persisted = created
+			}
+			return toolJSON(s.cardSummaryFor(persisted, board, false))
 		},
 	}
 }
@@ -1264,17 +1869,40 @@ type updateCardArgs struct {
 	Changes map[string]interface{} `json:"changes"`
 }
 
+// validUpdateChangeKeys lists every recognised key inside `update_card.changes`.
+// An unknown key is rejected up-front so a typo ("statuss") doesn't produce a
+// silent no-op (the previous behaviour where everything else was applied and
+// the typo was ignored). Keep alphabetical for easy auditing.
+var validUpdateChangeKeys = map[string]struct{}{
+	"assigned_to": {},
+	"description": {},
+	"due_date":    {},
+	"priority":    {},
+	"properties":  {},
+	"status":      {},
+	"title":       {},
+}
+
+func sortedValidUpdateChangeKeys() []string {
+	out := make([]string, 0, len(validUpdateChangeKeys))
+	for k := range validUpdateChangeKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (s *Server) toolUpdateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "update_card",
-			Description: "Updates an existing card. Pass `changes` as a dict; recognised keys are title, description, assigned_to, status, priority, due_date, properties. assigned_to accepts the literal \"me\" (the user calling this tool — never ask them for their id, just pass \"me\") or a Mattermost username. Properties is a partial map (id -> value) merged into the card's existing properties. Use this for status transitions ('move to Done'), reassignment, due-date updates, etc.",
+			Description: "Updates an existing card. Pass `changes` as a dict; recognised keys are title, description, assigned_to, status, priority, due_date, properties — any other key is rejected with the list of valid ones (so a typo never silently no-ops). assigned_to accepts \"me\" (the calling user) or a Mattermost username. status / priority match fuzzily (case-insensitive, leading numeric prefix and emoji ignored). Properties is a partial id->value map merged into the card's existing properties. Returns the updated card in the same shape as get_card_details().",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "changes"],
 				"properties": {
-					"card_id": {"type": "string"},
-					"changes": {"type": "object"}
+					"card_id": {"type": "string", "description": "Card id from search_cards()."},
+					"changes": {"type": "object", "description": "Map of field-name to new value. Allowed keys: title, description, assigned_to, status, priority, due_date, properties."}
 				}
 			}`),
 		},
@@ -1284,25 +1912,40 @@ func (s *Server) toolUpdateCard() toolEntry {
 				return toolError("invalid arguments: %v", err), nil
 			}
 			if args.CardID == "" || len(args.Changes) == 0 {
-				return toolError("card_id and changes are required"), nil
+				return toolError("card_id and a non-empty changes object are required"), nil
 			}
+			// Reject unknown keys before doing any work so we never leave a
+			// partial update applied with an unrecognised key dropped.
+			var unknown []string
+			for k := range args.Changes {
+				if _, ok := validUpdateChangeKeys[k]; !ok {
+					unknown = append(unknown, k)
+				}
+			}
+			if len(unknown) > 0 {
+				sort.Strings(unknown)
+				return toolError("unknown change key(s) %v — valid keys are %v",
+					unknown, sortedValidUpdateChangeKeys()), nil
+			}
+
 			existing, err := s.backend.GetCardByID(args.CardID)
 			if err != nil || existing == nil {
-				return toolError("card not found: %s", args.CardID), nil
+				return toolError("not found: card %s", args.CardID), nil
 			}
 			if !s.backend.HasPermissionToBoard(userID, existing.BoardID, model.PermissionManageBoardCards) {
-				return toolError("permission denied to edit cards on board %s", existing.BoardID), nil
+				return toolError("permission denied: cannot edit cards on board %s", existing.BoardID), nil
 			}
 			board, err := s.backend.GetBoard(existing.BoardID)
 			if err != nil || board == nil {
-				return toolError("parent board missing"), nil
+				return toolError("not found: parent board %s", existing.BoardID), nil
 			}
 
 			patch := &model.CardPatch{}
 			updatedProps := map[string]interface{}{}
 
 			if v, ok := args.Changes["title"].(string); ok {
-				patch.Title = &v
+				trimmed := strings.TrimSpace(v)
+				patch.Title = &trimmed
 			}
 			if v, ok := args.Changes["properties"].(map[string]interface{}); ok {
 				for k, val := range v {
@@ -1355,7 +1998,7 @@ func (s *Server) toolUpdateCard() toolEntry {
 			if err != nil {
 				return toolError("update card: %v", err), nil
 			}
-			return toolJSON(map[string]interface{}{"card": updated})
+			return toolJSON(s.cardSummaryFor(updated, board, false))
 		},
 	}
 }
@@ -1373,13 +2016,13 @@ func (s *Server) toolAddComment() toolEntry {
 	return toolEntry{
 		def: toolDef{
 			Name: "add_comment",
-			Description: "Adds a comment to a card on behalf of the current user. Use this for quick notes / status updates / questions on a specific task instead of editing the description.",
+			Description: "Adds a comment to a card on behalf of the current user. Use this for quick notes / status updates / questions on a specific task instead of editing the description. Returns the new comment_id, card_id, card_link, and the create timestamp.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "text"],
 				"properties": {
 					"card_id": {"type": "string"},
-					"text":    {"type": "string"}
+					"text":    {"type": "string", "description": "Comment body (markdown). Cannot be empty."}
 				}
 			}`),
 		},
@@ -1393,11 +2036,12 @@ func (s *Server) toolAddComment() toolEntry {
 			}
 			card, err := s.backend.GetCardByID(args.CardID)
 			if err != nil || card == nil {
-				return toolError("card not found: %s", args.CardID), nil
+				return toolError("not found: card %s", args.CardID), nil
 			}
 			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionCommentBoardCards) {
-				return toolError("permission denied to comment on board %s", card.BoardID), nil
+				return toolError("permission denied: cannot comment on board %s", card.BoardID), nil
 			}
+			board, _ := s.backend.GetBoard(card.BoardID)
 			block := &model.Block{
 				ID:         utils.NewID(utils.IDTypeBlock),
 				BoardID:    card.BoardID,
@@ -1410,7 +2054,891 @@ func (s *Server) toolAddComment() toolEntry {
 			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
 				return toolError("insert comment: %v", err), nil
 			}
-			return toolJSON(map[string]interface{}{"comment_id": block.ID})
+			out := map[string]interface{}{
+				"ok":         true,
+				"comment_id": block.ID,
+				"card_id":    card.ID,
+				"create_at":  block.CreateAt,
+				"create_iso": msToISO(block.CreateAt),
+			}
+			if board != nil {
+				out["card_link"] = cardLinkFor(board, card.ID)
+			}
+			return toolJSON(out)
+		},
+	}
+}
+
+// =====================================================================
+// list_board_members
+// =====================================================================
+
+func (s *Server) toolListBoardMembers() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "list_board_members",
+			Description: "Returns the list of members of a board: user_id, username, role (admin / editor / commenter / viewer). Use this when the user asks who is on a board, when picking an assignee for a new card, or to validate a username before passing it to assigned_to in create_card / update_card.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["board_id"],
+				"properties": {
+					"board_id": {"type": "string", "description": "Board id from list_my_boards()."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				BoardID string `json:"board_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.BoardID == "" {
+				return toolError("board_id is required"), nil
+			}
+			board, err := s.backend.GetBoard(args.BoardID)
+			if err != nil || board == nil {
+				return toolError("not found: board %s", args.BoardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
+				return toolError("permission denied: board %s", args.BoardID), nil
+			}
+			members := s.boardMembersFor(args.BoardID)
+			return toolJSON(map[string]interface{}{
+				"board_id": args.BoardID,
+				"members":  members,
+				"count":    len(members),
+			})
+		},
+	}
+}
+
+// =====================================================================
+// bulk_update_cards
+// =====================================================================
+
+type bulkUpdateChange struct {
+	CardID  string                 `json:"card_id"`
+	Changes map[string]interface{} `json:"changes"`
+}
+
+type bulkUpdateResult struct {
+	CardID  string       `json:"card_id"`
+	OK      bool         `json:"ok"`
+	Error   string       `json:"error,omitempty"`
+	Card    *cardSummary `json:"card,omitempty"`
+}
+
+func (s *Server) toolBulkUpdateCards() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "bulk_update_cards",
+			Description: "Applies the same kind of `changes` map (see update_card) to many cards in one call. Use this for batch operations like moving a list of cards to Done, reassigning everyone's tasks at once, etc. Each item is processed independently — successes return the resolved card, failures return an error string but don't abort the rest.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["updates"],
+				"properties": {
+					"updates": {
+						"type": "array",
+						"minItems": 1,
+						"maxItems": 200,
+						"items": {
+							"type": "object",
+							"required": ["card_id", "changes"],
+							"properties": {
+								"card_id": {"type": "string"},
+								"changes": {"type": "object", "description": "Same allowed keys as update_card.changes."}
+							}
+						}
+					}
+				}
+			}`),
+		},
+		handler: func(ctx context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				Updates []bulkUpdateChange `json:"updates"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if len(args.Updates) == 0 {
+				return toolError("updates array is required"), nil
+			}
+			if len(args.Updates) > 200 {
+				return toolError("at most 200 updates per call"), nil
+			}
+			updateHandler := s.toolUpdateCard().handler
+			results := make([]bulkUpdateResult, 0, len(args.Updates))
+			for _, u := range args.Updates {
+				perCallArgs, _ := json.Marshal(updateCardArgs{CardID: u.CardID, Changes: u.Changes})
+				res, _ := updateHandler(ctx, userID, perCallArgs)
+				if res.IsError {
+					msg := ""
+					if len(res.Content) > 0 {
+						msg = res.Content[0].Text
+					}
+					results = append(results, bulkUpdateResult{CardID: u.CardID, OK: false, Error: msg})
+					continue
+				}
+				var summary cardSummary
+				if len(res.Content) > 0 {
+					_ = json.Unmarshal([]byte(res.Content[0].Text), &summary)
+				}
+				results = append(results, bulkUpdateResult{CardID: u.CardID, OK: true, Card: &summary})
+			}
+			ok := 0
+			for _, r := range results {
+				if r.OK {
+					ok++
+				}
+			}
+			return toolJSON(map[string]interface{}{
+				"results":  results,
+				"ok_count": ok,
+				"total":    len(results),
+			})
+		},
+	}
+}
+
+// =====================================================================
+// delete_card
+// =====================================================================
+
+func (s *Server) toolDeleteCard() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "delete_card",
+			Description: "Deletes a card. This is a soft delete (DeleteAt is set on the underlying block, the row remains for audit / undo). Requires the same manage-board-cards permission as create / update. Returns {ok: true, card_id} on success.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["card_id"],
+				"properties": {
+					"card_id": {"type": "string", "description": "Card id from search_cards()."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CardID string `json:"card_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CardID == "" {
+				return toolError("card_id is required"), nil
+			}
+			existing, err := s.backend.GetCardByID(args.CardID)
+			if err != nil || existing == nil {
+				return toolError("not found: card %s", args.CardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, existing.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot delete cards on board %s", existing.BoardID), nil
+			}
+			if err := s.backend.DeleteBlockAndNotify(args.CardID, userID, false); err != nil {
+				return toolError("delete card: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":      true,
+				"card_id": args.CardID,
+			})
+		},
+	}
+}
+
+// =====================================================================
+// add_subtask / update_subtask / set_subtask_status / delete_subtask
+// =====================================================================
+//
+// Subtasks are stored as content blocks of type "subtask" parented to a card.
+// The text of the subtask lives in block.Title; the state lives in
+// block.Fields["optionId"], referencing an option of the board's
+// subtaskStatesPropertyId-pointed select property. Adding a subtask requires
+// appending its block id to the parent card's contentOrder so it surfaces in
+// the UI in the right position; deleting just deletes the block (the webapp
+// is tolerant of stale ids in contentOrder).
+
+// resolveSubtaskStatus returns the option id that matches the given status
+// label on the board's subtask-state property. Empty input returns ("", nil)
+// — the caller treats that as "clear the state". When the property isn't
+// configured on the board, returns an error so the agent gets the configure-
+// the-board hint instead of silently saving an option-less subtask.
+func (s *Server) resolveSubtaskStatus(board *model.Board, label string) (string, error) {
+	if strings.TrimSpace(label) == "" {
+		return "", nil
+	}
+	prop := boardSubtaskStateProperty(board)
+	if prop == nil {
+		return "", fmt.Errorf("status %q rejected: board has no subtask-states property configured (set board.fields.subtaskStatesPropertyId via the UI)", label)
+	}
+	id := findOptionIDByLabel(prop, label)
+	if id == "" {
+		return "", fmt.Errorf("status %q not in {%s}", label, optionList(prop))
+	}
+	return id, nil
+}
+
+// subtaskFromBlock projects a stored subtask block into the same cardSubtask
+// shape that get_card_details returns, so create / update / status responses
+// match the read view.
+func (s *Server) subtaskFromBlock(block *model.Block, stateProp propTemplate) cardSubtask {
+	out := cardSubtask{
+		ID:        block.ID,
+		Title:     block.Title,
+		CreateAt:  block.CreateAt,
+		CreateISO: msToISO(block.CreateAt),
+	}
+	if optID, _ := block.Fields["optionId"].(string); optID != "" {
+		out.OptionID = optID
+		if stateProp != nil {
+			for _, opt := range stateProp.options() {
+				if optionID(opt) == optID {
+					out.Status = optionValue(opt)
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// loadSubtask is the common preamble for the per-subtask edit tools: fetch
+// the block, verify it really is a subtask, load the parent card / board,
+// and check edit permission. Returns block, card, board on success. Errors
+// surface to the agent via the returned toolsCallResult — pass it through.
+func (s *Server) loadSubtask(userID, subtaskID string) (*model.Block, *model.Card, *model.Board, *toolsCallResult) {
+	block, err := s.backend.GetBlockByID(subtaskID)
+	if err != nil || block == nil {
+		r := toolError("not found: subtask %s", subtaskID)
+		return nil, nil, nil, &r
+	}
+	if string(block.Type) != "subtask" {
+		r := toolError("not a subtask: block %s is %s", subtaskID, block.Type)
+		return nil, nil, nil, &r
+	}
+	card, err := s.backend.GetCardByID(block.ParentID)
+	if err != nil || card == nil {
+		r := toolError("not found: parent card %s", block.ParentID)
+		return nil, nil, nil, &r
+	}
+	if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+		r := toolError("permission denied: cannot edit cards on board %s", card.BoardID)
+		return nil, nil, nil, &r
+	}
+	board, err := s.backend.GetBoard(card.BoardID)
+	if err != nil || board == nil {
+		r := toolError("not found: parent board %s", card.BoardID)
+		return nil, nil, nil, &r
+	}
+	return block, card, board, nil
+}
+
+func (s *Server) toolAddSubtask() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "add_subtask",
+			Description: "Appends a subtask to a card. title is required. status (optional) is the subtask-state label, fuzzy-matched against the board's configured subtask-states select property — pass an empty string or omit to leave the subtask unstated. Returns the created subtask in the same shape get_card_details() emits, plus card_link.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["card_id", "title"],
+				"properties": {
+					"card_id": {"type": "string", "description": "Parent card id."},
+					"title":   {"type": "string", "description": "Subtask text."},
+					"status":  {"type": "string", "description": "Optional subtask-state label, fuzzy-matched. Empty or omitted leaves the state unset."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CardID string `json:"card_id"`
+				Title  string `json:"title"`
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CardID == "" || strings.TrimSpace(args.Title) == "" {
+				return toolError("card_id and non-empty title are required"), nil
+			}
+			card, err := s.backend.GetCardByID(args.CardID)
+			if err != nil || card == nil {
+				return toolError("not found: card %s", args.CardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
+			}
+			board, err := s.backend.GetBoard(card.BoardID)
+			if err != nil || board == nil {
+				return toolError("not found: parent board %s", card.BoardID), nil
+			}
+
+			optID, err := s.resolveSubtaskStatus(board, args.Status)
+			if err != nil {
+				return toolError("%v", err), nil
+			}
+
+			block := &model.Block{
+				ID:         utils.NewID(utils.IDTypeBlock),
+				BoardID:    card.BoardID,
+				ParentID:   card.ID,
+				Type:       "subtask",
+				Title:      strings.TrimSpace(args.Title),
+				Fields:     map[string]interface{}{"optionId": optID},
+				CreatedBy:  userID,
+				ModifiedBy: userID,
+			}
+			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
+				return toolError("insert subtask: %v", err), nil
+			}
+
+			// Append to the card's contentOrder so the new subtask shows up
+			// in the UI. Mirrors what cardDetail.tsx does after insertBlock.
+			newOrder := append([]string{}, card.ContentOrder...)
+			newOrder = append(newOrder, block.ID)
+			patch := &model.CardPatch{ContentOrder: &newOrder}
+			if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+				s.logger.Warn("mcp: subtask inserted but contentOrder patch failed",
+					mlog.String("card_id", card.ID),
+					mlog.String("subtask_id", block.ID),
+					mlog.Err(err),
+				)
+			}
+
+			persisted, err := s.backend.GetBlockByID(block.ID)
+			if err != nil || persisted == nil {
+				persisted = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":        true,
+				"subtask":   s.subtaskFromBlock(persisted, boardSubtaskStateProperty(board)),
+				"card_id":   card.ID,
+				"card_link": cardLinkFor(board, card.ID),
+			})
+		},
+	}
+}
+
+func (s *Server) toolUpdateSubtask() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "update_subtask",
+			Description: "Edits a subtask. Pass title to change the text and/or status to change the subtask-state label (fuzzy-matched). At least one of the two must be provided. Use set_subtask_status when you only need to flip the state — that tool is a focused alias. To clear the state pass status as an empty string.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["subtask_id"],
+				"properties": {
+					"subtask_id": {"type": "string"},
+					"title":      {"type": "string", "description": "New subtask text. Omit to leave unchanged."},
+					"status":     {"type": "string", "description": "New subtask-state label, fuzzy-matched. Empty string clears the state. Omit (do not pass the key) to leave unchanged."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			// Accept the keys explicitly so we can tell "status omitted" from
+			// "status: empty string" (clear) using a raw map.
+			var rawArgs map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &rawArgs); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			var subtaskID, title string
+			var newStatus string
+			titleSet, statusSet := false, false
+			if v, ok := rawArgs["subtask_id"]; ok {
+				_ = json.Unmarshal(v, &subtaskID)
+			}
+			if v, ok := rawArgs["title"]; ok {
+				_ = json.Unmarshal(v, &title)
+				titleSet = true
+			}
+			if v, ok := rawArgs["status"]; ok {
+				_ = json.Unmarshal(v, &newStatus)
+				statusSet = true
+			}
+			if subtaskID == "" {
+				return toolError("subtask_id is required"), nil
+			}
+			if !titleSet && !statusSet {
+				return toolError("at least one of title or status must be provided"), nil
+			}
+
+			block, _, board, errResult := s.loadSubtask(userID, subtaskID)
+			if errResult != nil {
+				return *errResult, nil
+			}
+
+			patch := &model.BlockPatch{}
+			if titleSet {
+				trimmed := strings.TrimSpace(title)
+				patch.Title = &trimmed
+			}
+			if statusSet {
+				optID, err := s.resolveSubtaskStatus(board, newStatus)
+				if err != nil {
+					return toolError("%v", err), nil
+				}
+				patch.UpdatedFields = map[string]interface{}{"optionId": optID}
+			}
+
+			updated, err := s.backend.PatchBlockAndNotify(subtaskID, patch, userID, false)
+			if err != nil {
+				return toolError("update subtask: %v", err), nil
+			}
+			if updated == nil {
+				updated = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":      true,
+				"subtask": s.subtaskFromBlock(updated, boardSubtaskStateProperty(board)),
+			})
+		},
+	}
+}
+
+func (s *Server) toolSetSubtaskStatus() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "set_subtask_status",
+			Description: "Sets the state of a subtask. status is matched fuzzily against the board's configured subtask-states select property. Pass an empty string to clear the state. This is a thin alias over update_subtask for the common state-flip case.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["subtask_id", "status"],
+				"properties": {
+					"subtask_id": {"type": "string"},
+					"status":     {"type": "string", "description": "Subtask-state label, fuzzy-matched. Empty string clears the state."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			// Accept "status" as either present (any value, including empty
+			// string) or missing. Empty-but-present means "clear"; missing
+			// is an arg error.
+			var rawArgs map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &rawArgs); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			var subtaskID, status string
+			if v, ok := rawArgs["subtask_id"]; ok {
+				_ = json.Unmarshal(v, &subtaskID)
+			}
+			statusRaw, statusSet := rawArgs["status"]
+			if statusSet {
+				_ = json.Unmarshal(statusRaw, &status)
+			}
+			if subtaskID == "" {
+				return toolError("subtask_id is required"), nil
+			}
+			if !statusSet {
+				return toolError("status is required (pass an empty string to clear)"), nil
+			}
+
+			block, _, board, errResult := s.loadSubtask(userID, subtaskID)
+			if errResult != nil {
+				return *errResult, nil
+			}
+
+			optID, err := s.resolveSubtaskStatus(board, status)
+			if err != nil {
+				return toolError("%v", err), nil
+			}
+			patch := &model.BlockPatch{
+				UpdatedFields: map[string]interface{}{"optionId": optID},
+			}
+			updated, err := s.backend.PatchBlockAndNotify(subtaskID, patch, userID, false)
+			if err != nil {
+				return toolError("set subtask status: %v", err), nil
+			}
+			if updated == nil {
+				updated = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":      true,
+				"subtask": s.subtaskFromBlock(updated, boardSubtaskStateProperty(board)),
+			})
+		},
+	}
+}
+
+func (s *Server) toolDeleteSubtask() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "delete_subtask",
+			Description: "Deletes a subtask block. Soft delete (DeleteAt is set on the underlying block). Requires manage-board-cards permission on the parent board. Returns {ok, subtask_id}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["subtask_id"],
+				"properties": {
+					"subtask_id": {"type": "string"}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				SubtaskID string `json:"subtask_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.SubtaskID == "" {
+				return toolError("subtask_id is required"), nil
+			}
+			_, _, _, errResult := s.loadSubtask(userID, args.SubtaskID)
+			if errResult != nil {
+				return *errResult, nil
+			}
+			if err := s.backend.DeleteBlockAndNotify(args.SubtaskID, userID, false); err != nil {
+				return toolError("delete subtask: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":         true,
+				"subtask_id": args.SubtaskID,
+			})
+		},
+	}
+}
+
+// =====================================================================
+// add_checkbox / update_checkbox / delete_checkbox
+// =====================================================================
+//
+// Checkbox content blocks are simple inline todos in the card body: a text
+// title plus a boolean stored at block.Fields["value"]. Distinct from
+// checkbox-typed property templates (those are columns on the card and are
+// edited via update_card properties). Storage shape mirrors subtasks (block
+// of type "checkbox", parented to the card, must be appended to the card's
+// contentOrder to surface in the UI).
+
+// checkboxFromBlock projects a stored checkbox block into the cardCheckbox
+// shape. Used both when listing existing checkboxes in get_card_details and
+// when echoing a freshly-mutated checkbox back from add / update.
+func checkboxFromBlock(block *model.Block) cardCheckbox {
+	out := cardCheckbox{
+		ID:        block.ID,
+		Title:     block.Title,
+		CreateAt:  block.CreateAt,
+		CreateISO: msToISO(block.CreateAt),
+	}
+	if v, ok := block.Fields["value"].(bool); ok {
+		out.Checked = v
+	}
+	return out
+}
+
+// loadCheckbox is the per-call preamble for the per-checkbox edit tools:
+// fetch the block, verify type, load card / board, check edit permission.
+// Returns block, card, board on success; error result on failure.
+func (s *Server) loadCheckbox(userID, checkboxID string) (*model.Block, *model.Card, *model.Board, *toolsCallResult) {
+	block, err := s.backend.GetBlockByID(checkboxID)
+	if err != nil || block == nil {
+		r := toolError("not found: checkbox %s", checkboxID)
+		return nil, nil, nil, &r
+	}
+	if string(block.Type) != "checkbox" {
+		r := toolError("not a checkbox: block %s is %s", checkboxID, block.Type)
+		return nil, nil, nil, &r
+	}
+	card, err := s.backend.GetCardByID(block.ParentID)
+	if err != nil || card == nil {
+		r := toolError("not found: parent card %s", block.ParentID)
+		return nil, nil, nil, &r
+	}
+	if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+		r := toolError("permission denied: cannot edit cards on board %s", card.BoardID)
+		return nil, nil, nil, &r
+	}
+	board, err := s.backend.GetBoard(card.BoardID)
+	if err != nil || board == nil {
+		r := toolError("not found: parent board %s", card.BoardID)
+		return nil, nil, nil, &r
+	}
+	return block, card, board, nil
+}
+
+func (s *Server) toolAddCheckbox() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "add_checkbox",
+			Description: "Appends a checkbox (inline todo) to a card. title is required. checked defaults to false. Use this for simple in-body checklists; use add_subtask when you need labelled states beyond done/not-done. Returns the created checkbox in the same shape get_card_details() emits, plus card_link.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["card_id", "title"],
+				"properties": {
+					"card_id": {"type": "string", "description": "Parent card id."},
+					"title":   {"type": "string", "description": "Checkbox text."},
+					"checked": {"type": "boolean", "description": "Initial checked state. Default false."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CardID  string `json:"card_id"`
+				Title   string `json:"title"`
+				Checked bool   `json:"checked"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CardID == "" || strings.TrimSpace(args.Title) == "" {
+				return toolError("card_id and non-empty title are required"), nil
+			}
+			card, err := s.backend.GetCardByID(args.CardID)
+			if err != nil || card == nil {
+				return toolError("not found: card %s", args.CardID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
+				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
+			}
+			board, err := s.backend.GetBoard(card.BoardID)
+			if err != nil || board == nil {
+				return toolError("not found: parent board %s", card.BoardID), nil
+			}
+
+			block := &model.Block{
+				ID:         utils.NewID(utils.IDTypeBlock),
+				BoardID:    card.BoardID,
+				ParentID:   card.ID,
+				Type:       "checkbox",
+				Title:      strings.TrimSpace(args.Title),
+				Fields:     map[string]interface{}{"value": args.Checked},
+				CreatedBy:  userID,
+				ModifiedBy: userID,
+			}
+			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
+				return toolError("insert checkbox: %v", err), nil
+			}
+
+			newOrder := append([]string{}, card.ContentOrder...)
+			newOrder = append(newOrder, block.ID)
+			patch := &model.CardPatch{ContentOrder: &newOrder}
+			if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+				s.logger.Warn("mcp: checkbox inserted but contentOrder patch failed",
+					mlog.String("card_id", card.ID),
+					mlog.String("checkbox_id", block.ID),
+					mlog.Err(err),
+				)
+			}
+
+			persisted, err := s.backend.GetBlockByID(block.ID)
+			if err != nil || persisted == nil {
+				persisted = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":        true,
+				"checkbox":  checkboxFromBlock(persisted),
+				"card_id":   card.ID,
+				"card_link": cardLinkFor(board, card.ID),
+			})
+		},
+	}
+}
+
+func (s *Server) toolUpdateCheckbox() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "update_checkbox",
+			Description: "Edits a checkbox. Pass title to change the text and/or checked to flip the state. At least one of the two must be provided. Omit a field (don't pass the key) to leave it unchanged — passing checked=false explicitly clears the box.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["checkbox_id"],
+				"properties": {
+					"checkbox_id": {"type": "string"},
+					"title":       {"type": "string", "description": "New checkbox text. Omit to leave unchanged."},
+					"checked":     {"type": "boolean", "description": "New checked state. Omit (do not pass the key) to leave unchanged."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			// Distinguish "checked omitted" from "checked: false" by
+			// inspecting the raw JSON map directly.
+			var rawArgs map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &rawArgs); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			var checkboxID, title string
+			var checked bool
+			titleSet, checkedSet := false, false
+			if v, ok := rawArgs["checkbox_id"]; ok {
+				_ = json.Unmarshal(v, &checkboxID)
+			}
+			if v, ok := rawArgs["title"]; ok {
+				_ = json.Unmarshal(v, &title)
+				titleSet = true
+			}
+			if v, ok := rawArgs["checked"]; ok {
+				_ = json.Unmarshal(v, &checked)
+				checkedSet = true
+			}
+			if checkboxID == "" {
+				return toolError("checkbox_id is required"), nil
+			}
+			if !titleSet && !checkedSet {
+				return toolError("at least one of title or checked must be provided"), nil
+			}
+
+			block, _, _, errResult := s.loadCheckbox(userID, checkboxID)
+			if errResult != nil {
+				return *errResult, nil
+			}
+
+			patch := &model.BlockPatch{}
+			if titleSet {
+				trimmed := strings.TrimSpace(title)
+				patch.Title = &trimmed
+			}
+			if checkedSet {
+				patch.UpdatedFields = map[string]interface{}{"value": checked}
+			}
+
+			updated, err := s.backend.PatchBlockAndNotify(checkboxID, patch, userID, false)
+			if err != nil {
+				return toolError("update checkbox: %v", err), nil
+			}
+			if updated == nil {
+				updated = block
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":       true,
+				"checkbox": checkboxFromBlock(updated),
+			})
+		},
+	}
+}
+
+func (s *Server) toolDeleteCheckbox() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "delete_checkbox",
+			Description: "Deletes a checkbox content block. Soft delete (DeleteAt is set on the underlying block). Requires manage-board-cards permission on the parent board. Returns {ok, checkbox_id}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["checkbox_id"],
+				"properties": {
+					"checkbox_id": {"type": "string"}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CheckboxID string `json:"checkbox_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CheckboxID == "" {
+				return toolError("checkbox_id is required"), nil
+			}
+			_, _, _, errResult := s.loadCheckbox(userID, args.CheckboxID)
+			if errResult != nil {
+				return *errResult, nil
+			}
+			if err := s.backend.DeleteBlockAndNotify(args.CheckboxID, userID, false); err != nil {
+				return toolError("delete checkbox: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":           true,
+				"checkbox_id":  args.CheckboxID,
+			})
+		},
+	}
+}
+
+// =====================================================================
+// update_comment / delete_comment
+// =====================================================================
+
+func (s *Server) toolUpdateComment() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "update_comment",
+			Description: "Edits the text of a comment. Only the comment author can edit; admins must use the Mattermost UI. Returns {ok, comment_id, text}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["comment_id", "text"],
+				"properties": {
+					"comment_id": {"type": "string"},
+					"text":       {"type": "string", "description": "New comment body. Cannot be empty — to remove a comment use delete_comment."}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CommentID string `json:"comment_id"`
+				Text      string `json:"text"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CommentID == "" || strings.TrimSpace(args.Text) == "" {
+				return toolError("comment_id and non-empty text are required"), nil
+			}
+			block, err := s.backend.GetBlockByID(args.CommentID)
+			if err != nil || block == nil {
+				return toolError("not found: comment %s", args.CommentID), nil
+			}
+			if string(block.Type) != "comment" {
+				return toolError("not a comment: block %s is %s", args.CommentID, block.Type), nil
+			}
+			if block.CreatedBy != userID {
+				return toolError("permission denied: comment %s belongs to a different user", args.CommentID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, block.BoardID, model.PermissionCommentBoardCards) {
+				return toolError("permission denied: cannot comment on board %s", block.BoardID), nil
+			}
+			patch := &model.BlockPatch{Title: &args.Text}
+			if _, err := s.backend.PatchBlockAndNotify(args.CommentID, patch, userID, false); err != nil {
+				return toolError("update comment: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":         true,
+				"comment_id": args.CommentID,
+				"text":       args.Text,
+			})
+		},
+	}
+}
+
+func (s *Server) toolDeleteComment() toolEntry {
+	return toolEntry{
+		def: toolDef{
+			Name: "delete_comment",
+			Description: "Deletes a comment. Only the comment author can delete via this tool. Returns {ok, comment_id}.",
+			InputSchema: rawSchema(`{
+				"type": "object",
+				"required": ["comment_id"],
+				"properties": {
+					"comment_id": {"type": "string"}
+				}
+			}`),
+		},
+		handler: func(_ context.Context, userID string, raw json.RawMessage) (toolsCallResult, error) {
+			var args struct {
+				CommentID string `json:"comment_id"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return toolError("invalid arguments: %v", err), nil
+			}
+			if args.CommentID == "" {
+				return toolError("comment_id is required"), nil
+			}
+			block, err := s.backend.GetBlockByID(args.CommentID)
+			if err != nil || block == nil {
+				return toolError("not found: comment %s", args.CommentID), nil
+			}
+			if string(block.Type) != "comment" {
+				return toolError("not a comment: block %s is %s", args.CommentID, block.Type), nil
+			}
+			if block.CreatedBy != userID {
+				return toolError("permission denied: comment %s belongs to a different user", args.CommentID), nil
+			}
+			if !s.backend.HasPermissionToBoard(userID, block.BoardID, model.PermissionCommentBoardCards) {
+				return toolError("permission denied: cannot comment on board %s", block.BoardID), nil
+			}
+			if err := s.backend.DeleteBlockAndNotify(args.CommentID, userID, false); err != nil {
+				return toolError("delete comment: %v", err), nil
+			}
+			return toolJSON(map[string]interface{}{
+				"ok":         true,
+				"comment_id": args.CommentID,
+			})
 		},
 	}
 }

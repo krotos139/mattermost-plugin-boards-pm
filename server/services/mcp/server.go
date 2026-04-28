@@ -33,12 +33,16 @@ type Backend interface {
 	PatchCard(patch *model.CardPatch, cardID, userID string, disableNotify bool) (*model.Card, error)
 	HasPermissionToBoard(userID, boardID string, permission *mm_model.Permission) bool
 	GetMembersForUser(userID string) ([]*model.BoardMember, error)
+	GetMembersForBoard(boardID string) ([]*model.BoardMember, error)
 
 	// Block-level operations used to read card content (description text,
 	// subtasks, etc.) and to write comments. Comments are stored as blocks
 	// of type=`comment` whose parentID is the card ID.
 	GetBlocks(boardID, parentID, blockType string) ([]*model.Block, error)
+	GetBlockByID(blockID string) (*model.Block, error)
 	InsertBlockAndNotify(block *model.Block, modifiedByID string, disableNotify bool) error
+	PatchBlockAndNotify(blockID string, blockPatch *model.BlockPatch, modifiedByID string, disableNotify bool) (*model.Block, error)
+	DeleteBlockAndNotify(blockID string, modifiedBy string, disableNotify bool) error
 }
 
 // SessionAPI is the subset of plugin.API we need to validate bearer tokens,
