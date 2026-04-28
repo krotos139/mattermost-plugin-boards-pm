@@ -7,14 +7,13 @@ import {IntlShape, useIntl} from 'react-intl'
 import {ContentBlock} from '../../blocks/contentBlock'
 import {VideoBlock, createVideoBlock} from '../../blocks/videoBlock'
 import octoClient from '../../octoClient'
-import {Utils} from '../../utils'
-import {sendFlashMessage} from '../../components/flashMessages'
-
 import {FileInfo} from '../../blocks/block'
+import {Utils} from '../../utils'
+import CompassIcon from '../../widgets/icons/compassIcon'
+import {sendFlashMessage} from '../../components/flashMessages'
 
 import {contentRegistry} from './contentRegistry'
 import ArchivedFile from './archivedFile/archivedFile'
-import CompassIcon from '../../widgets/icons/compassIcon'
 
 import './videoElement.scss'
 

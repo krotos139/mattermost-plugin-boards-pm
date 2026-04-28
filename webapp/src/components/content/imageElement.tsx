@@ -9,16 +9,14 @@ import {ContentBlock} from '../../blocks/contentBlock'
 import {ImageBlock, createImageBlock} from '../../blocks/imageBlock'
 import octoClient from '../../octoClient'
 import mutator from '../../mutator'
-import {Block} from '../../blocks/block'
+import {Block, FileInfo} from '../../blocks/block'
 import {Utils} from '../../utils'
 import ImageIcon from '../../widgets/icons/image'
+import CompassIcon from '../../widgets/icons/compassIcon'
 import {sendFlashMessage} from '../../components/flashMessages'
-
-import {FileInfo} from '../../blocks/block'
 
 import {contentRegistry} from './contentRegistry'
 import ArchivedFile from './archivedFile/archivedFile'
-import CompassIcon from '../../widgets/icons/compassIcon'
 
 import './imageElement.scss'
 
