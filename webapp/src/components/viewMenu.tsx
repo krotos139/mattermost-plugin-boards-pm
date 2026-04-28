@@ -19,6 +19,7 @@ import DeleteIcon from '../widgets/icons/delete'
 import DuplicateIcon from '../widgets/icons/duplicate'
 import GalleryIcon from '../widgets/icons/gallery'
 import GanttIcon from '../widgets/icons/gantt'
+import ResourceIcon from '../widgets/icons/resource'
 import TableIcon from '../widgets/icons/table'
 import Menu from '../widgets/menu'
 
@@ -247,6 +248,45 @@ const ViewMenu = (props: Props) => {
             })
     }, [props.board, props.activeView, props.intl, showView])
 
+    const handleAddViewResource = useCallback(() => {
+        const {board, activeView, intl} = props
+
+        Utils.log('addview-resource')
+
+        const view = createBoardView()
+        view.title = intl.formatMessage({id: 'View.NewResourceTitle', defaultMessage: 'Resource view'})
+        view.fields.viewType = 'resource'
+        view.parentId = board.id
+        view.boardId = board.id
+        view.fields.visiblePropertyIds = [Constants.titleColumnId]
+
+        const oldViewId = activeView.id
+
+        // Pre-pick a sensible default for both axes so a fresh Resource view
+        // is non-empty out of the gate when the board already has matching
+        // properties. The user can swap either via the header menus.
+        view.fields.dateDisplayPropertyId = board.cardProperties.find((o: IPropertyTemplate) => o.type === 'date')?.id
+        view.fields.resourcePropertyId = board.cardProperties.find((o: IPropertyTemplate) =>
+            o.type === 'person' ||
+            o.type === 'multiPerson' ||
+            o.type === 'personNotify' ||
+            o.type === 'multiPersonNotify')?.id
+
+        mutator.insertBlock(
+            view.boardId,
+            view,
+            'add view',
+            async (block: Block) => {
+                setTimeout(() => {
+                    Utils.log(`showView: ${block.id}`)
+                    showView(block.id)
+                }, 120)
+            },
+            async () => {
+                showView(oldViewId)
+            })
+    }, [props.board, props.activeView, props.intl, showView])
+
     const {views, intl} = props
 
     const duplicateViewText = intl.formatMessage({
@@ -281,6 +321,7 @@ const ViewMenu = (props: Props) => {
         case 'gallery': return <GalleryIcon/>
         case 'calendar': return <CalendarIcon/>
         case 'gantt': return <GanttIcon/>
+        case 'resource': return <ResourceIcon/>
         default: return <div/>
         }
     }
@@ -358,6 +399,12 @@ const ViewMenu = (props: Props) => {
                                 name={intl.formatMessage({id: 'View.Gantt', defaultMessage: 'Timeline'})}
                                 icon={<GanttIcon/>}
                                 onClick={handleAddViewGantt}
+                            />
+                            <Menu.Text
+                                id='resource'
+                                name={intl.formatMessage({id: 'View.Resource', defaultMessage: 'Resource'})}
+                                icon={<ResourceIcon/>}
+                                onClick={handleAddViewResource}
                             />
                         </div>
                     </Menu.SubMenu>

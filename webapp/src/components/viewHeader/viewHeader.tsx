@@ -42,6 +42,7 @@ import ViewHeaderDisplayByMenu from './viewHeaderDisplayByMenu'
 import ViewHeaderLinkedByMenu from './viewHeaderLinkedByMenu'
 import ViewHeaderProgressByMenu from './viewHeaderProgressByMenu'
 import ViewHeaderColorByMenu from './viewHeaderColorByMenu'
+import ViewHeaderResourceByMenu from './viewHeaderResourceByMenu'
 import ViewHeaderSortMenu from './viewHeaderSortMenu'
 import ViewHeaderActionsMenu from './viewHeaderActionsMenu'
 import ViewHeaderSearch from './viewHeaderSearch'
@@ -76,9 +77,14 @@ const ViewHeader = (props: Props) => {
     const isDashboard = Boolean((board.properties as Record<string, unknown> | undefined)?.dashboardKind)
 
     const withGroupBy = activeView.fields.viewType === 'board' || activeView.fields.viewType === 'table'
-    const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt'
+    const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource'
     const withLinkedBy = activeView.fields.viewType === 'gantt'
-    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt'
+    // Progress / color are reused on both Timeline (Gantt) and Resource
+    // views — both render bars and benefit from the same per-bar fill /
+    // progress overlay configuration.
+    const withProgressAndColor = activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource'
+    const withResourceBy = activeView.fields.viewType === 'resource'
+    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource'
 
     // Gantt's "Linked by" lookup needs the resolved property template, not
     // just the id, so the button can show a human label and the menu can
@@ -89,12 +95,16 @@ const ViewHeader = (props: Props) => {
 
     // Same as linkedByProperty above — resolve here so the button label can
     // show the property's human name.
-    const progressProperty = withLinkedBy && activeView.fields.progressPropertyId ?
+    const progressProperty = withProgressAndColor && activeView.fields.progressPropertyId ?
         board.cardProperties.find((p) => p.id === activeView.fields.progressPropertyId) :
         undefined
 
-    const colorProperty = withLinkedBy && activeView.fields.colorPropertyId ?
+    const colorProperty = withProgressAndColor && activeView.fields.colorPropertyId ?
         board.cardProperties.find((p) => p.id === activeView.fields.colorPropertyId) :
+        undefined
+
+    const resourceProperty = withResourceBy && activeView.fields.resourcePropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.resourcePropertyId) :
         undefined
 
     const [viewTitle, setViewTitle] = useState(activeView.title)
@@ -208,14 +218,21 @@ const ViewHeader = (props: Props) => {
                     linkedByPropertyName={linkedByProperty?.name}
                 />}
 
-                {withLinkedBy &&
+                {withResourceBy &&
+                <ViewHeaderResourceByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    resourcePropertyName={resourceProperty?.name}
+                />}
+
+                {withProgressAndColor &&
                 <ViewHeaderProgressByMenu
                     properties={board.cardProperties}
                     activeView={activeView}
                     progressPropertyName={progressProperty?.name}
                 />}
 
-                {withLinkedBy &&
+                {withProgressAndColor &&
                 <ViewHeaderColorByMenu
                     properties={board.cardProperties}
                     activeView={activeView}

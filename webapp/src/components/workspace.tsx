@@ -150,7 +150,7 @@ function CenterContent(props: Props) {
         }
 
         let displayProperty = dateDisplayProperty
-        if (!displayProperty && (activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt')) {
+        if (!displayProperty && (activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource')) {
             // Same null-guard as above.
             displayProperty = (board?.cardProperties || []).find((o) => propsRegistry.get(o.type) instanceof DatePropertyType)
         }

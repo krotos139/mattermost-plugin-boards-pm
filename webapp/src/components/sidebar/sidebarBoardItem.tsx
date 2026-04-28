@@ -32,6 +32,7 @@ import TableIcon from '../../widgets/icons/table'
 import GalleryIcon from '../../widgets/icons/gallery'
 import CalendarIcon from '../../widgets/icons/calendar'
 import GanttIcon from '../../widgets/icons/gantt'
+import ResourceIcon from '../../widgets/icons/resource'
 
 import {getCurrentTeam} from '../../store/teams'
 import {Permission} from '../../constants'
@@ -54,6 +55,7 @@ const iconForViewType = (viewType: IViewType): JSX.Element => {
     case 'gallery': return <GalleryIcon/>
     case 'calendar': return <CalendarIcon/>
     case 'gantt': return <GanttIcon/>
+    case 'resource': return <ResourceIcon/>
     default: return <div/>
     }
 }

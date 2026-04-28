@@ -903,6 +903,19 @@ class Mutator {
         )
     }
 
+    async changeViewResourcePropertyId(boardId: string, viewId: string, oldResourcePropertyId: string|undefined, resourcePropertyId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('resourcePropertyId', resourcePropertyId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('resourcePropertyId', oldResourcePropertyId))
+            },
+            'resource by',
+            this.undoDisplayId,
+        )
+    }
+
     async changeViewVisiblePropertiesOrder(boardId: string, view: BoardView, template: IPropertyTemplate, destIndex: number, description = 'change property order'): Promise<void> {
         const oldVisiblePropertyIds = view.fields.visiblePropertyIds
         const newOrder = oldVisiblePropertyIds.slice()

@@ -1,0 +1,274 @@
+// Resource view shares most of its layout with the Timeline (Gantt) view —
+// it's the same frappe-gantt chart with a different left-side panel and a
+// different per-bar color rule. Where rules duplicate ganttView.scss, that's
+// intentional: forking the styles avoids cross-contamination if either view
+// gains custom chrome later.
+
+.ResourceContainer {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 24px;
+
+    &--empty {
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+        font-size: 13px;
+        padding: 24px;
+    }
+
+    &__layout {
+        display: flex;
+        align-items: stretch;
+        min-width: 0;
+        min-height: 0;
+        width: 100%;
+    }
+
+    &__chart {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 400px;
+        user-select: none;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+
+        text,
+        .gantt-container,
+        .gantt {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+    }
+
+    &__props {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        max-width: 80%;
+        border-right: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
+        background: var(--g-header-background, rgb(var(--center-channel-bg-rgb)));
+    }
+
+    &__props-header {
+        display: flex;
+        align-items: flex-end;
+        border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
+        background: rgba(var(--center-channel-color-rgb), 0.04);
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+
+    &__props-body {
+        flex: 1 1 auto;
+        position: relative;
+        overflow: hidden;
+    }
+
+    &__props-body-inner {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        will-change: transform;
+    }
+
+    &__props-row {
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.06);
+    }
+
+    // First row of each resource group gets a stronger top border so the
+    // swim lanes are visually separated from each other.
+    &__props-row--first {
+        border-top: 1px solid rgba(var(--center-channel-color-rgb), 0.18);
+    }
+
+    &__props-cell {
+        flex: 0 0 auto;
+        position: relative;
+        min-width: 0;
+        padding: 4px 8px;
+        font-size: 12px;
+        color: rgb(var(--center-channel-color-rgb));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        box-sizing: border-box;
+
+        > * {
+            max-width: 100%;
+        }
+
+        &--header {
+            padding: 8px 16px 8px 8px;
+            text-transform: none;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 4px;
+        }
+    }
+
+    &__props-cell-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    &__props-grip {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 0;
+        width: 10px;
+        cursor: col-resize;
+        touch-action: none;
+        z-index: 1;
+        user-select: none;
+
+        &::after {
+            content: '';
+            position: absolute;
+            top: 25%;
+            bottom: 25%;
+            right: 4px;
+            width: 2px;
+            background: rgba(var(--center-channel-color-rgb), 0);
+            transition: background 120ms ease;
+        }
+
+        &:hover::after,
+        &:active::after {
+            background: rgba(var(--center-channel-color-rgb), 0.4);
+        }
+    }
+
+    // Two-line cell layout for the resource label: name on top, workload
+    // summary below in a smaller muted font. Only rendered for the first
+    // row of each group, which is why we let it overflow the row's height
+    // budget by using compact line-heights.
+    &__resource-cell {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        line-height: 1.2;
+        gap: 2px;
+        overflow: hidden;
+    }
+
+    &__resource-name {
+        font-weight: 600;
+        font-size: 13px;
+        color: rgb(var(--center-channel-color-rgb));
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    &__resource-summary {
+        font-size: 11px;
+        color: rgba(var(--center-channel-color-rgb), 0.55);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .frappe-gantt-popup {
+        font-size: 13px;
+    }
+
+    .GanttPopup {
+        font-size: 13px;
+        max-width: 320px;
+        min-width: 200px;
+
+        &__title {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 6px;
+            color: var(--g-text-dark, rgb(var(--center-channel-color-rgb)));
+            word-break: break-word;
+        }
+    }
+
+    // Conflict signal: bars that overlap on the same resource row get a
+    // hatched diagonal fill so the user spots double-booked time at a
+    // glance. The base color comes from `Color by` (or default) and we
+    // overlay a strong red stroke + gradient.
+    .gantt .bar-wrapper.gantt-bar-conflict {
+        .bar {
+            stroke: rgba(220, 53, 69, 0.95);
+            stroke-width: 1.5;
+            stroke-dasharray: 4 2;
+        }
+    }
+
+    // Bar colors driven by the "Color by" select-property option, mirrored
+    // verbatim from ganttView.scss. We could share this via a partial, but
+    // the duplication keeps each view's stylesheet self-contained — easier
+    // to read in isolation.
+    .gantt .bar-wrapper {
+        &[class*='gantt-bar-color-'] .bar {
+            stroke: rgba(0, 0, 0, 0.15);
+            stroke-width: 0.5;
+        }
+
+        &.gantt-bar-color-propColorDefault {
+            .bar { fill: var(--prop-default); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-default), black 25%); }
+        }
+        &.gantt-bar-color-propColorGray {
+            .bar { fill: var(--prop-gray); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-gray), black 30%); }
+        }
+        &.gantt-bar-color-propColorBrown {
+            .bar { fill: var(--prop-brown); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-brown), black 30%); }
+        }
+        &.gantt-bar-color-propColorOrange {
+            .bar { fill: var(--prop-orange); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-orange), black 30%); }
+        }
+        &.gantt-bar-color-propColorYellow {
+            .bar { fill: var(--prop-yellow); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-yellow), black 30%); }
+        }
+        &.gantt-bar-color-propColorGreen {
+            .bar { fill: var(--prop-green); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-green), black 30%); }
+        }
+        &.gantt-bar-color-propColorBlue {
+            .bar { fill: var(--prop-blue); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-blue), black 30%); }
+        }
+        &.gantt-bar-color-propColorPurple {
+            .bar { fill: var(--prop-purple); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-purple), black 30%); }
+        }
+        &.gantt-bar-color-propColorPink {
+            .bar { fill: var(--prop-pink); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-pink), black 30%); }
+        }
+        &.gantt-bar-color-propColorRed {
+            .bar { fill: var(--prop-red); }
+            .bar-progress { fill: color-mix(in srgb, var(--prop-red), black 30%); }
+        }
+    }
+
+    .gantt .grid-header {
+        fill: rgba(var(--center-channel-color-rgb), 0.04);
+    }
+
+    .gantt .lower-text,
+    .gantt .upper-text {
+        fill: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+}

@@ -5,7 +5,7 @@
 import {Block, createBlock} from './block'
 import {FilterGroup, createFilterGroup} from './filterGroup'
 
-type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt'
+type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource'
 type ISortOption = { propertyId: '__title' | string, reversed: boolean }
 
 type KanbanCalculationFields = {
@@ -26,6 +26,11 @@ type BoardViewFields = {
     // Gantt view: id of a select property whose chosen option's color is
     // applied to the corresponding bar.
     colorPropertyId?: string
+    // Resource view: id of the person / multiPerson property whose values
+    // are expanded into one swim-lane row per assignee. A card with N
+    // assignees produces N rows in the Resource view (one per person);
+    // a card with no assignee falls into a synthetic "Unassigned" group.
+    resourcePropertyId?: string
     sortOptions: ISortOption[]
     visiblePropertyIds: string[]
     visibleOptionIds: string[]
@@ -54,6 +59,7 @@ function createBoardView(block?: Block): BoardView {
             linkedByPropertyId: block?.fields.linkedByPropertyId,
             progressPropertyId: block?.fields.progressPropertyId,
             colorPropertyId: block?.fields.colorPropertyId,
+            resourcePropertyId: block?.fields.resourcePropertyId,
             sortOptions: block?.fields.sortOptions?.map((o: ISortOption) => ({...o})) || [],
             visiblePropertyIds: block?.fields.visiblePropertyIds?.slice() || [],
             visibleOptionIds: block?.fields.visibleOptionIds?.slice() || [],

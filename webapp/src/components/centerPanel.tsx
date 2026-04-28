@@ -55,6 +55,7 @@ import Table from './table/table'
 
 import CalendarFullView from './calendar/fullCalendar'
 import GanttView from './gantt/ganttView'
+import ResourceView from './resource/resourceView'
 
 import CardLimitNotification from './cardLimitNotification'
 
@@ -508,6 +509,16 @@ const CenterPanel = (props: Props) => {
 
             {activeView.fields.viewType === 'gantt' &&
                 <GanttView
+                    board={props.board}
+                    cards={props.cards}
+                    activeView={props.activeView}
+                    readonly={props.readonly}
+                    dateDisplayProperty={props.dateDisplayProperty}
+                    showCard={showCard}
+                />}
+
+            {activeView.fields.viewType === 'resource' &&
+                <ResourceView
                     board={props.board}
                     cards={props.cards}
                     activeView={props.activeView}
