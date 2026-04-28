@@ -13,9 +13,9 @@ const manifest = JSON.parse(`
     "description": "Mattermost Boards plugin with project-management extensions: Timeline view, deadlines + DM reminders, dashboard boards, mobile login handoff.",
     "homepage_url": "https://github.com/krotos139/mattermost-plugin-boards-pm",
     "support_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/issues",
-    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.2.1",
+    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.2.2",
     "icon_path": "assets/starter-template-icon.svg",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "min_server_version": "10.7.0",
     "server": {
         "executables": {
@@ -41,6 +41,42 @@ const manifest = JSON.parse(`
                 "help_text": "This allows board editors to share boards that can be accessed by anyone with the link.",
                 "placeholder": "",
                 "default": false,
+                "hosting": ""
+            },
+            {
+                "key": "EnableMCPServer",
+                "display_name": "Enable MCP Server:",
+                "type": "bool",
+                "help_text": "Run a Model Context Protocol server so AI agents can drive Boards. Users mint personal API keys with the /boards getapi slash command.",
+                "placeholder": "",
+                "default": false,
+                "hosting": ""
+            },
+            {
+                "key": "MCPListenAddress",
+                "display_name": "MCP Listen Address:",
+                "type": "text",
+                "help_text": "host:port for the MCP listener. Default 127.0.0.1:8975 (loopback only). Use 0.0.0.0:\u003cport\u003e to accept connections from outside the host — every TCP request must then carry an API key.",
+                "placeholder": "",
+                "default": "127.0.0.1:8975",
+                "hosting": ""
+            },
+            {
+                "key": "MCPRequireBearerOnLoopback",
+                "display_name": "Require API key on loopback:",
+                "type": "bool",
+                "help_text": "Hardened mode: even local 127.0.0.1 callers must present a Bearer key. Off by default.",
+                "placeholder": "",
+                "default": false,
+                "hosting": ""
+            },
+            {
+                "key": "MCPKeysTable",
+                "display_name": "Issued MCP API keys:",
+                "type": "custom",
+                "help_text": "",
+                "placeholder": "",
+                "default": null,
                 "hosting": ""
             }
         ]

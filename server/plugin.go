@@ -252,6 +252,13 @@ func boardsCommand(mcpKeysAvailable bool) *mm_model.Command {
 // Anything that doesn't parse as a subcommand and starts with "/" is still
 // treated as a deep-link path for the legacy handoff flow, preserving
 // backward compatibility with `/boards /boards/team/<id>/<board>`.
+//
+// The second return value is part of Mattermost's plugin.Hooks
+// ExecuteCommand contract; we always return nil because user-visible
+// errors are surfaced as ephemeral messages instead. unparam flags the
+// always-nil result, but the signature is fixed by the interface.
+//
+//nolint:unparam
 func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *mm_model.CommandArgs) (*mm_model.CommandResponse, *mm_model.AppError) {
 	rest := strings.TrimSpace(strings.TrimPrefix(args.Command, "/"+boardsCommandTrigger))
 

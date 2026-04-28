@@ -4,9 +4,9 @@
     "description": "Mattermost Boards plugin with project-management extensions: Timeline view, deadlines + DM reminders, dashboard boards, mobile login handoff.",
     "homepage_url": "https://github.com/krotos139/mattermost-plugin-boards-pm",
     "support_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/issues",
-    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.2.1",
+    "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.2.2",
     "icon_path": "assets/starter-template-icon.svg",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "min_server_version": "10.7.0",
     "server": {
         "executables": {
@@ -34,13 +34,13 @@
             "type": "bool",
             "display_name": "Enable MCP Server:",
             "default": false,
-            "help_text": "Run a Model Context Protocol server so AI agents can drive Boards. Users mint personal API keys with `/boards getapi`."
+            "help_text": "Run a Model Context Protocol server so AI agents can drive Boards. Users mint personal API keys with the /boards getapi slash command."
         }, {
             "key": "MCPListenAddress",
             "type": "text",
             "display_name": "MCP Listen Address:",
             "default": "127.0.0.1:8975",
-            "help_text": "host:port for the MCP listener. Default `127.0.0.1:8975` (loopback only). Use `0.0.0.0:<port>` to accept connections from outside the host — every TCP request must then carry an API key."
+            "help_text": "host:port for the MCP listener. Default 127.0.0.1:8975 (loopback only). Use 0.0.0.0:<port> to accept connections from outside the host — every TCP request must then carry an API key."
         }, {
             "key": "MCPRequireBearerOnLoopback",
             "type": "bool",
