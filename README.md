@@ -113,40 +113,84 @@ The link expires after 60 seconds and works only once. Tap it again from the eph
 
 Touch DnD requires a 250ms long-press before drag starts, with a 20px scroll-tolerance threshold — so vertical scroll on phones no longer reorders cards. Sidebar auto-collapses after navigation on screens narrower than 768px, including for the new dashboard boards.
 
+### Card attachments and video content
+
+Cards now have a dedicated **Attachments** column (next to Comments / History) plus inline image and video content blocks. Attachments are listed vertically with a download button per row; images can be clicked to open in a full-screen lightbox; videos render as an inline `<video controls>` player when added as a content block. Drag-and-drop on the card body and clipboard paste both work — files are routed by MIME: `image/*` → image content, `video/*` → video content, anything else → attachment list. Deleting an attachment removes the underlying file from storage too (the file is kept only as long as some block still references it).
+
+The MCP API exposes this surface as `attach_file`, `get_attachment`, `delete_attachment`, plus an `attachments[]` array on `get_card_details`. See the [tool table](#ai-agent-integration-via-mcp-server) below.
+
 ### AI agent integration via MCP server
 
-Optional, off-by-default Model Context Protocol (MCP) server that lets the [Mattermost Agents (AI) plugin](https://github.com/mattermost/mattermost-plugin-agents) drive Boards on the user's behalf — list boards, search cards across all boards with rich filters, read full card detail, create / update cards, add comments. Every call runs under the requesting user's own permissions; the AI never sees boards or cards the user can't see.
+Optional, off-by-default Model Context Protocol (MCP) server that lets the [Mattermost Agents (AI) plugin](https://github.com/mattermost/mattermost-plugin-agents) drive Boards on the user's behalf — list boards, search cards across all boards with rich filters, read full card detail, create / update cards, add comments, attach and read files. Every call runs under the requesting user's own permissions; the AI never sees boards or cards the user can't see.
 
 **Enable it.** System Console → Plugins → **Mattermost Boards (PM fork)**:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | **Enable MCP Server** | off | Master switch. Off = no MCP at all. |
-| **MCP Server Port** | `8975` | TCP port the loopback listener binds to. Pick any free port. |
-| **MCP Shared Secret** | empty | Optional. If set, every MCP request must carry `Authorization: Bearer <secret>`. Recommended on shared servers. |
+| **MCP Listen Address** | `127.0.0.1:8975` | `host:port` for the TCP listener. Use `0.0.0.0:<port>` to accept connections from outside the host. The plugin transport (`plugin://focalboard/mcp`) is always available regardless of this value. |
+| **Require API key on loopback** | off | Hardened mode: even local `127.0.0.1` callers must present a Bearer key. Leave off when you only run the bundled Mattermost AI Agent. |
+| **Issued MCP API keys** | — | Admin table: lists every key issued across all users with prefix, owner, description, issued/last-used timestamps; admins can revoke from here. |
 
-The listener only binds to `127.0.0.1` — never reachable from off the host. The plugin also exposes the same MCP endpoint through Mattermost's inter-plugin HTTP API at `plugin://focalboard/mcp` for callers that prefer to skip TCP.
+Two transports are exposed and both serve the same MCP toolset:
 
-**Wire up Mattermost Agents.** System Console → Agents → MCP → **Add server**:
+- **Plugin transport** — `plugin://focalboard/mcp` over Mattermost's inter-plugin HTTP API. Used by the bundled Mattermost AI Agent. **No API key needed:** the trust boundary is Mattermost's `Mattermost-Plugin-ID` header, which Mattermost itself sets and strips.
+- **TCP transport** — `http://<host>:<port>/mcp`. Required for any external MCP client (Claude Desktop, Cursor, custom agents). Always requires a per-user Bearer key when bound to a non-loopback host; on loopback the Bearer is optional unless you flip **Require API key on loopback**.
 
-- **Server URL:** `http://127.0.0.1:8975/mcp` (replace port if you changed it).
-- **Headers:** leave empty unless you set the shared secret. If you did, add a single row `Authorization` = `Bearer <your-secret>`.
-- **Per-user identity:** automatic. The Agents plugin auto-injects `X-Mattermost-UserID: <id>` on every call, and the MCP server uses that to scope all backend calls to the requesting user.
+> **`/boards` slash-command surface.** When MCP is disabled, or when the listener is bound only to a loopback address (`127.0.0.1` / `::1` / `localhost`), the `getapi` / `listapi` / `revokeapi` subcommands are hidden — issuing personal keys on a loopback-only deployment would produce keys nobody outside the host can use, and the bundled AI Agent doesn't need them anyway. Re-bind the listener to `0.0.0.0:<port>` (or any non-loopback host) and the key-management commands reappear automatically.
 
-After adding the server, **remove and re-add it whenever you upgrade this plugin** — Agents caches the tool list at registration time and won't see newly added tools until re-registration.
+#### Wire it up to the bundled Mattermost AI Agent
 
-**Tools exposed** (the AI agent picks these automatically based on user prompts):
+The Mattermost AI Agent runs in-process with Boards, so it uses the inter-plugin transport and **doesn't need an API key at all**.
+
+1. Set **Enable MCP Server** to **on**. Listen address can stay at the default `127.0.0.1:8975` — the Agent doesn't go through TCP.
+2. System Console → **AI Agents** → pick your agent → **MCP servers** → **Add server**:
+    - **Name:** `Boards` (or whatever you want).
+    - **BaseURL:** `plugin://focalboard/mcp`
+    - **Headers:** leave empty.
+3. Save. The Agent registers the Boards toolset on the next message.
+
+> **Re-add after every plugin upgrade.** The Agent caches the tool list at registration time. After upgrading this plugin, remove and re-add the MCP server entry so the Agent picks up newly added tools. (You'll see this when a new release adds tools — for example, `attach_file` / `get_attachment` / `delete_attachment` arrived in v1.2.0.)
+
+#### Wire it up to an external MCP client (Claude Desktop, Cursor, custom)
+
+External clients reach the plugin over TCP, so the listener must be bound to a non-loopback address and each user needs a personal Bearer key.
+
+1. **As an admin:** System Console → Plugins → Mattermost Boards (PM fork) → set **MCP Listen Address** to `0.0.0.0:8975` (or any reachable interface), enable the MCP server, save.
+2. **As the user:** in Mattermost, run `/boards getapi <description>` in any channel. You'll get an ephemeral message with the plaintext key (shown once), the server URL, the key prefix for revocation, and a ready-to-paste JSON config block. Save the key into your password manager.
+3. Drop the JSON snippet into your MCP client config — for Claude Desktop, this lives in `claude_desktop_config.json` under `mcpServers`:
+
+    ```json
+    {
+      "mcpServers": {
+        "boards": {
+          "url": "http://your-mattermost-host:8975/mcp",
+          "headers": { "Authorization": "Bearer <key from /boards getapi>" }
+        }
+      }
+    }
+    ```
+
+4. Restart the client. The Boards tools appear in its tool list.
+
+To rotate or revoke: `/boards listapi` shows your prefixes; `/boards revokeapi <prefix>` (or paste the full key) revokes immediately. Admins can revoke any user's key from System Console → **Issued MCP API keys**.
+
+#### Tools exposed
 
 | Tool | What it does |
 | --- | --- |
 | `get_current_user` | Returns the calling user's id, username, name, email — so the agent never has to ask "what's your user id?". |
 | `list_my_boards` | Every non-template board across the user's teams, sorted by last update. |
 | `get_board_info` | Schema for one board: properties, status / priority option lists, due-date property name, assignee-property names. Call this before creating or updating cards. |
-| `search_cards` | Cross-board (or single-board) search with filters: text query, `assigned_to` (`me` / username / `any` / `unassigned`), `status`, `priority`, `due_date_range` (`overdue` / `today` / `this_week` / `next_week` / `YYYY-MM-DD..YYYY-MM-DD`), `has_subtasks`, `limit`. |
-| `get_card_details` | Full card: title, description, status / priority / due / assignees, all comments with authors, subtasks blocks. |
+| `search_cards` | Cross-board (or single-board) search with filters: text query (matches titles, body, comments, attachment filenames), `assigned_to` (`me` / username / `any` / `unassigned`), `status`, `priority`, `due_date_range` (`overdue` / `today` / `this_week` / `next_week` / `YYYY-MM-DD..YYYY-MM-DD`), `has_subtasks`, `limit`. |
+| `get_card_details` | Full card: title, description, status / priority / due / assignees, all comments with authors, subtasks blocks, **`attachments[]`** array (image / video / attachment blocks with id, filename, mime, size, uploader). |
 | `create_card` | Title-and-shortcuts form (`assigned_to`, `status`, `priority`, `due_date`) plus a free-form properties dict. Accepts `"me"` for assigned_to. |
+| `create_board` | Creates a new private board on a team using a stub template. Returns the new board id and URL. |
 | `update_card` | Partial change dict, reads existing properties and merges so untouched fields survive. |
 | `add_comment` | Posts a comment block on a card, attributed to the calling user. |
+| `attach_file` | Uploads a file to a card. Routes by MIME: `image/*` → inline image block, `video/*` → inline video block, anything else → attachment list. Filename is sanitized (no `/`, `\`, `..`, `.`, `..`); UTF-8 names round-trip via a percent-encoded sidecar to survive non-`utf8mb4` Mattermost installs. |
+| `get_attachment` | Streams a single attachment back. Text-like MIME types (`text/*`, `application/json`, etc.) are returned inline as decoded UTF-8 up to `max_bytes` (default 5 MiB, hard cap 50 MiB); binaries return base64 with `inlined: false` and a reason. |
+| `delete_attachment` | Removes an attachment from a card. The underlying file is also deleted from disk if no other card / block references it. |
 
 **Example prompts that work without further configuration:**
 
@@ -154,23 +198,33 @@ After adding the server, **remove and re-add it whenever you upgrade this plugin
 - "Close my current 'In Progress' task and start the next highest-priority one."
 - "Assign every unassigned card on Engineering to me, due in two days."
 - "Comment on card ABC123 saying I'll finish it tomorrow."
+- "Read the build log attached to card XYZ987 and tell me which test failed."
+- "Create a card 'Investigate flaky CI', attach the screenshot I just shared, assign to me."
 
-**Verification (loopback only).** From the Mattermost host:
+**Verification.** From the Mattermost host:
 
 ```bash
 curl http://127.0.0.1:8975/health
 # {"status":"ok"} when the listener is up
 
+# Loopback request (no key required by default; your X-Mattermost-UserID
+# acts as the trusted identity since Mattermost strips that header on
+# external requests):
 curl -s -X POST http://127.0.0.1:8975/mcp \
   -H 'Content-Type: application/json' \
   -H 'X-Mattermost-UserID: <your-mm-user-id>' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
   | python -m json.tool
-# Should list 8 tools: get_current_user, list_my_boards, get_board_info,
-# search_cards, get_card_details, create_card, update_card, add_comment
+
+# External request with a personal key minted via /boards getapi:
+curl -s -X POST http://your-mattermost-host:8975/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <key>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | python -m json.tool
 ```
 
-If `/health` doesn't answer, the listener didn't start — check Mattermost server logs for `mcp:` lines (port collision, bind error, etc.).
+If `/health` doesn't answer, the listener didn't start — check Mattermost server logs for `mcp:` lines (port collision, bind error, etc.). If `tools/list` returns an authentication error on a non-loopback request, double-check the `Authorization: Bearer` header against the prefix shown by `/boards listapi`.
 
 ### Card detail layout
 

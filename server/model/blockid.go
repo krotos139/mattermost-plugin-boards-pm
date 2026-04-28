@@ -72,14 +72,17 @@ func GenerateBlockIDs(blocks []*Block, logger mlog.LoggerIFace) []*Block {
 		}
 	}
 
+	// Pre-generate a new ID for every block in the batch. Previously the map
+	// only held entries for blocks that were *referenced* by another block's
+	// BoardID/ParentID/contentOrder/cardOrder/defaultTemplateId. That was
+	// fine for the original use cases but missed card-id values stored
+	// inside per-card property values (Task / Multi task properties hold
+	// card IDs). To remap those reliably we need the full old->new table
+	// for every card-id that appears anywhere in the batch, not just the
+	// ones surfaced by the structural reference scan above.
 	newIDs := map[string]string{}
 	for id, blockType := range blockIDs {
-		for referenceID := range referenceIDs {
-			if id == referenceID {
-				newIDs[id] = utils.NewID(BlockType2IDType(blockType))
-				continue
-			}
-		}
+		newIDs[id] = utils.NewID(BlockType2IDType(blockType))
 	}
 
 	getExistingOrOldID := func(id string) string {
@@ -126,10 +129,63 @@ func GenerateBlockIDs(blocks []*Block, logger mlog.LoggerIFace) []*Block {
 			}
 		}
 
+		// Remap any per-card property value that references another block
+		// in this batch. Task properties store a single card id (string);
+		// Multi-task properties store an array of card ids ([]interface{}
+		// of strings after JSON unmarshal). We walk the properties map and
+		// substitute any string equal to a known old block id with its new
+		// id. We don't need to know which property is type=task/multiTask:
+		// the substitution only fires when the value actually matches a
+		// block id we generated above, so non-task properties (select
+		// option ids, person user ids, free text, dates) are left alone
+		// because their values are never block ids. Without this the
+		// imported board keeps stale card-id references in Task / Multi
+		// task fields, breaking Timeline view dependency arrows and the
+		// task-selector display.
+		if blockMod.Type == TypeCard {
+			remapCardPropertyIDs(blockMod, newIDs)
+		}
+
 		newBlocks[i] = blockMod
 	}
 
 	return newBlocks
+}
+
+// remapCardPropertyIDs rewrites string and []string property values inside a
+// card block's `properties` map when they equal a known old block id. The
+// substitution is keyed strictly on `oldToNew` membership, so non-card-id
+// property values (select option ids, user ids, dates, free text) pass
+// through unchanged.
+func remapCardPropertyIDs(block *Block, oldToNew map[string]string) {
+	props, ok := block.Fields["properties"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for key, value := range props {
+		switch v := value.(type) {
+		case string:
+			if newID, found := oldToNew[v]; found {
+				props[key] = newID
+			}
+		case []interface{}:
+			rewritten := false
+			out := make([]interface{}, len(v))
+			for j, item := range v {
+				if s, isStr := item.(string); isStr {
+					if newID, found := oldToNew[s]; found {
+						out[j] = newID
+						rewritten = true
+						continue
+					}
+				}
+				out[j] = item
+			}
+			if rewritten {
+				props[key] = out
+			}
+		}
+	}
 }
 
 func fixFieldIDs(block *Block, fieldName string, getExistingOrOldID func(string) string, logger mlog.LoggerIFace) {

@@ -84,7 +84,7 @@ func (p *Plugin) OnActivate() error {
 	p.handoff = handoff.New(p.MattermostPlugin.API, logger)
 	p.mcpLogger = logger
 	p.mcpKeys = mcp.NewKeyStore(p.MattermostPlugin.API, logger)
-	if err := p.MattermostPlugin.API.RegisterCommand(boardsCommand()); err != nil {
+	if err := p.MattermostPlugin.API.RegisterCommand(boardsCommand(p.mcpKeysAvailable())); err != nil {
 		logger.Warn("could not register /boards slash command", mlog.Err(err))
 	}
 	if err := p.boardsApp.Start(); err != nil {
@@ -217,14 +217,27 @@ func splitListenAddr(s string) (string, int, error) {
 
 const boardsCommandTrigger = "boards"
 
-func boardsCommand() *mm_model.Command {
+// boardsCommand builds the slash-command registration. When `mcpKeysAvailable`
+// is false (MCP server disabled, or its TCP listener is bound only to the
+// loopback interface where external clients can't reach it), the autocomplete
+// only advertises the deep-link form — getapi/listapi/revokeapi would be
+// dead-ends so we hide them from discovery.
+func boardsCommand(mcpKeysAvailable bool) *mm_model.Command {
+	desc := "Open Boards in your browser"
+	hint := ""
+	autocompleteDesc := "Open Boards"
+	if mcpKeysAvailable {
+		desc = "Open Boards in your browser, or manage personal MCP API keys for AI agents"
+		hint = "[getapi <description> | listapi | revokeapi <prefix-or-key> | help]"
+		autocompleteDesc = "Open Boards or manage MCP API keys"
+	}
 	return &mm_model.Command{
 		Trigger:          boardsCommandTrigger,
 		AutoComplete:     true,
-		AutoCompleteDesc: "Open Boards or manage MCP API keys",
-		AutoCompleteHint: "[getapi <description> | listapi | revokeapi <prefix-or-key> | help]",
+		AutoCompleteDesc: autocompleteDesc,
+		AutoCompleteHint: hint,
 		DisplayName:      "Boards",
-		Description:      "Open Boards in your browser, or manage personal MCP API keys for AI agents",
+		Description:      desc,
 	}
 }
 
@@ -246,24 +259,34 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *mm_model.CommandArgs) (
 	// they don't collide with the bare keywords below.
 	if rest != "" && !strings.HasPrefix(rest, "/") {
 		fields := strings.Fields(rest)
+		keysAvailable := p.mcpKeysAvailable()
 		switch strings.ToLower(fields[0]) {
 		case "help":
-			return ephemeralResponse(boardsHelpText()), nil
+			return ephemeralResponse(p.boardsHelpText(keysAvailable)), nil
 		case "getapi":
+			if !keysAvailable {
+				return ephemeralResponse(mcpKeysUnavailableText()), nil
+			}
 			desc := ""
 			if len(fields) > 1 {
 				desc = strings.TrimSpace(strings.TrimPrefix(rest, fields[0]))
 			}
 			return p.handleGetAPI(args, desc), nil
 		case "listapi":
+			if !keysAvailable {
+				return ephemeralResponse(mcpKeysUnavailableText()), nil
+			}
 			return p.handleListAPI(args), nil
 		case "revokeapi":
+			if !keysAvailable {
+				return ephemeralResponse(mcpKeysUnavailableText()), nil
+			}
 			if len(fields) < 2 {
 				return ephemeralResponse("Usage: `/boards revokeapi <prefix-or-full-key>` — pass either the 8-char prefix from `/boards listapi` or the full plaintext key."), nil
 			}
 			return p.handleRevokeAPI(args, fields[1]), nil
 		}
-		return ephemeralResponse("Unknown subcommand. " + boardsHelpText()), nil
+		return ephemeralResponse("Unknown subcommand. " + p.boardsHelpText(keysAvailable)), nil
 	}
 
 	return p.handleHandoff(args, rest), nil
@@ -450,6 +473,48 @@ func (p *Plugin) mcpEnabled() bool {
 	return enabled
 }
 
+// mcpKeysAvailable reports whether personal MCP keys are useful in this
+// deployment. Personal keys authenticate external HTTP clients hitting the
+// TCP listener; when MCP is off, when no port is bound, or when the listener
+// is bound only to a loopback address (so only same-host external clients
+// can reach it), the /boards getapi|listapi|revokeapi subcommands are
+// hidden — they would issue keys nobody could use. The Mattermost AI Agent's
+// inter-plugin transport (`plugin://focalboard/mcp`) does not require these
+// keys, so this gate doesn't affect that integration.
+func (p *Plugin) mcpKeysAvailable() bool {
+	if !p.mcpEnabled() {
+		return false
+	}
+	desired := p.desiredMCPConfig()
+	if desired.port <= 0 {
+		return false
+	}
+	return !isLoopbackAddr(desired.host)
+}
+
+// isLoopbackAddr reports whether host resolves to a loopback interface. We
+// match by literal first (covers "127.0.0.1", "::1", "localhost", "[::1]"),
+// then fall through to net.IP.IsLoopback for other 127.0.0.0/8 addresses.
+func isLoopbackAddr(host string) bool {
+	host = strings.TrimSpace(host)
+	switch strings.ToLower(host) {
+	case "", "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
+}
+
+func mcpKeysUnavailableText() string {
+	return "MCP API key management is unavailable in this deployment. " +
+		"The MCP server is either disabled or bound only to a loopback address (`127.0.0.1`/`::1`), " +
+		"so external MCP clients can't reach it. " +
+		"Ask your admin to enable the MCP server and bind it to a non-loopback address " +
+		"in System Console → Plugins → Mattermost Boards."
+}
+
 // mcpExternalURL builds a URL the user can paste into their MCP client.
 // When the listener is bound to a wildcard address, we substitute the
 // SiteURL hostname so the user gets something they can actually connect to.
@@ -482,7 +547,13 @@ func isWildcardAddr(s string) bool {
 	return false
 }
 
-func boardsHelpText() string {
+func (p *Plugin) boardsHelpText(keysAvailable bool) string {
+	if !keysAvailable {
+		return "**`/boards` — open Boards**\n" +
+			"- `/boards` — get a one-time link that opens Boards in your browser without re-logging in.\n" +
+			"- `/boards help` — this message.\n\n" +
+			"_MCP API key management is hidden because the MCP server is disabled or bound only to a loopback address._"
+	}
 	return "**`/boards` — open Boards or manage MCP API keys**\n" +
 		"- `/boards` — get a one-time link that opens Boards in your browser without re-logging in.\n" +
 		"- `/boards getapi <description>` — issue a personal MCP API key. Shown once.\n" +
@@ -509,6 +580,12 @@ func (p *Plugin) OnConfigurationChange() error {
 		return err
 	}
 	p.reconcileMCP()
+	// Re-register the slash command so autocomplete reflects the current
+	// MCP-keys availability (admins may have enabled/disabled the MCP server
+	// or changed the listen address since OnActivate).
+	if err := p.MattermostPlugin.API.RegisterCommand(boardsCommand(p.mcpKeysAvailable())); err != nil {
+		p.mcpLogger.Warn("could not re-register /boards slash command", mlog.Err(err))
+	}
 	return nil
 }
 

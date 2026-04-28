@@ -13,7 +13,7 @@ import {Constants} from '../constants'
 
 const TopBar = (): JSX.Element => {
     if (Utils.isFocalboardPlugin()) {
-        const feedbackUrl = 'https://www.focalboard.com/fwlink/feedback-boards.html?v=' + Constants.versionString
+        const feedbackUrl = 'https://github.com/krotos139/mattermost-plugin-boards-pm'
         return (
             <div
                 className='TopBar'

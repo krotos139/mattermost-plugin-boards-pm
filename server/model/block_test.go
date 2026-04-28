@@ -298,6 +298,67 @@ func TestGenerateBlockIDs(t *testing.T) {
 		require.NotEqual(t, blockID1, block2DefaultTemplateID)
 		require.Equal(t, blocks[0].ID, block2DefaultTemplateID)
 	})
+
+	t.Run("Should remap card-id values stored in Task / Multi task properties", func(t *testing.T) {
+		// Three card blocks. cardA has a Task property pointing at cardB
+		// (single string value) and a Multi task property pointing at
+		// cardB+cardC (array of strings). After regenerating IDs the Task
+		// property must reference cardB's NEW id, and the Multi task
+		// property must reference both new ids — otherwise Timeline
+		// "Linked by" arrows and the task selector would show stale or
+		// missing references after import / duplicate-board.
+		boardID := utils.NewID(utils.IDTypeBoard)
+		cardAID := utils.NewID(utils.IDTypeCard)
+		cardBID := utils.NewID(utils.IDTypeCard)
+		cardCID := utils.NewID(utils.IDTypeCard)
+		nonCardOptionID := "select-option-not-a-card"
+
+		cardA := &Block{
+			ID:       cardAID,
+			BoardID:  boardID,
+			ParentID: boardID,
+			Type:     TypeCard,
+			Fields: map[string]interface{}{
+				"properties": map[string]interface{}{
+					"task-prop":       cardBID,
+					"multi-task-prop": []interface{}{cardBID, cardCID},
+					"select-prop":     nonCardOptionID,
+				},
+			},
+		}
+		cardB := &Block{ID: cardBID, BoardID: boardID, ParentID: boardID, Type: TypeCard}
+		cardC := &Block{ID: cardCID, BoardID: boardID, ParentID: boardID, Type: TypeCard}
+
+		blocks := GenerateBlockIDs([]*Block{cardA, cardB, cardC}, &mlog.Logger{})
+
+		// Resolve the new IDs by finding the rewritten cards.
+		require.Len(t, blocks, 3)
+		var newA, newB, newC string
+		for _, b := range blocks {
+			switch b {
+			case cardA:
+				newA = b.ID
+			case cardB:
+				newB = b.ID
+			case cardC:
+				newC = b.ID
+			}
+		}
+		require.NotEqual(t, cardAID, newA)
+		require.NotEqual(t, cardBID, newB)
+		require.NotEqual(t, cardCID, newC)
+
+		props, ok := cardA.Fields["properties"].(map[string]interface{})
+		require.True(t, ok)
+
+		require.Equal(t, newB, props["task-prop"], "task-prop must be remapped to cardB's new id")
+
+		multi, ok := props["multi-task-prop"].([]interface{})
+		require.True(t, ok)
+		require.Equal(t, []interface{}{newB, newC}, multi, "multi-task-prop must be remapped to new ids of cardB+cardC")
+
+		require.Equal(t, nonCardOptionID, props["select-prop"], "select-option ids must be left untouched")
+	})
 }
 
 func TestStampModificationMetadata(t *testing.T) {

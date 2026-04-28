@@ -129,14 +129,24 @@ func (a *App) fixImagesAttachments(boardMap map[string]*model.Board, fileMap map
 		blockIDs := make([]string, 0)
 		blockPatches := make([]model.BlockPatch, 0)
 		for _, block := range newBlocks {
-			if block.Type == "image" || block.Type == "attachment" {
+			if block.Type == model.TypeImage || block.Type == model.TypeAttachment || block.Type == model.TypeVideo {
 				fieldName := "fileId"
-				oldID := block.Fields[fieldName]
+				oldID, ok := block.Fields[fieldName].(string)
+				if !ok || oldID == "" {
+					continue
+				}
+				newID, ok := fileMap[oldID]
+				if !ok {
+					// the file referenced by this block was not present in the
+					// archive (orphan reference); leave the block alone so it
+					// surfaces as an archived/missing file rather than getting
+					// rewritten to an empty id.
+					continue
+				}
 				blockIDs = append(blockIDs, block.ID)
-
 				blockPatches = append(blockPatches, model.BlockPatch{
 					UpdatedFields: map[string]interface{}{
-						fieldName: fileMap[oldID.(string)],
+						fieldName: newID,
 					},
 				})
 			}

@@ -34,6 +34,7 @@ import {
 
 import {getCurrentCard} from '../../store/cards'
 import {Utils} from '../../utils'
+import {UserSettings} from '../../userSettings'
 
 import {TOUR_SIDEBAR, SidebarTourSteps, TOUR_BOARD, FINISHED} from '../../components/onboardingTour/index'
 import telemetryClient, {TelemetryActions, TelemetryCategory} from '../../telemetry/telemetryClient'
@@ -179,34 +180,76 @@ const SidebarCategory = (props: Props) => {
             return
         }
         telemetryClient.trackEvent(TelemetryCategory, TelemetryActions.DeleteBoard, {board: deleteBoard.id})
-        
+
         // Capture the category ID before deletion
         const deletedFromCategoryID = props.categoryBoards.id
-        
+
+        // If the URL is currently pointing at the board we're about to
+        // delete, navigate AWAY before kicking off the deletion. The fix
+        // must happen pre-delete because the websocket "board removed"
+        // notification can arrive before mutator.deleteBoard's onSuccess
+        // callback (and often does on a low-latency local server). The
+        // moment the board is gone from the redux store, boardPage's
+        // recovery effect fires loadOrJoinBoard against the still-stale
+        // URL, the server returns 403, and admins (manage_system /
+        // manage_team) see "Join private board" for a board that no
+        // longer exists. Navigating first changes match.params.boardId
+        // before currentBoard goes null, so the recovery effect's
+        // dependency array sees the new boardId and skips the doomed one.
+        const isViewingDeleted = match.params.boardId === deleteBoard.id
+        if (isViewingDeleted) {
+            // Pick a sibling in the same category. The renamed
+            // `nextSiblingIndex` (was misleading `nextBoardId`) is checked
+            // with `!== undefined`; the old `if (nextBoardId)` rejected a
+            // legitimate index of 0, which is exactly what you get when
+            // deleting the last item of a 2-board category.
+            let nextSiblingIndex: number | undefined
+            if (props.boards.length > 1) {
+                const deleteBoardIndex = props.boards.findIndex((board) => board.id === deleteBoard.id)
+                if (deleteBoardIndex >= 0) {
+                    nextSiblingIndex = deleteBoardIndex + 1 === props.boards.length ? deleteBoardIndex - 1 : deleteBoardIndex + 1
+                }
+            }
+
+            if (nextSiblingIndex !== undefined && props.boards[nextSiblingIndex]) {
+                showBoard(props.boards[nextSiblingIndex].id)
+            } else {
+                // No sibling in this category — navigate to the team root
+                // so TeamToBoardAndViewRedirect picks the next visible
+                // board across all categories. Clear lastBoardId first if
+                // it pointed at the deleted board, otherwise the redirect
+                // will dutifully re-navigate back to the dead id.
+                if (UserSettings.lastBoardId[teamID] === deleteBoard.id) {
+                    UserSettings.setLastBoardID(teamID, null)
+                }
+                // Use the bare team-root pattern instead of
+                // getBoardPagePath(...) with an empty boardId — the latter
+                // generates a `/team/<id>//` path with a stale empty
+                // segment that some browsers normalize and some don't.
+                const newPath = generatePath('/team/:teamId', {teamId: teamID})
+                history.replace(newPath)
+                props.hideSidebar()
+            }
+        }
+
         mutator.deleteBoard(
             deleteBoard,
             intl.formatMessage({id: 'Sidebar.delete-board', defaultMessage: 'Delete board'}),
             async () => {
-                let nextBoardId: number | undefined
-                if (props.boards.length > 1) {
-                    const deleteBoardIndex = props.boards.findIndex((board) => board.id === deleteBoard.id)
-                    nextBoardId = deleteBoardIndex + 1 === props.boards.length ? deleteBoardIndex - 1 : deleteBoardIndex + 1
-                }
-
-                if (nextBoardId) {
-                // This delay is needed because WSClient has a default 100 ms notification delay before updates
-                    setTimeout(() => {
-                        showBoard(props.boards[nextBoardId as number].id)
-                    }, 120)
-                }
+                // Navigation already performed pre-delete when the URL
+                // matched the doomed board; nothing left to do here.
             },
             async () => {
-                // Restore the board to the category it was deleted from
+                // Undo path: restore the board to its original category and
+                // navigate back to it. Restoring a board users were not
+                // viewing leaves their current URL untouched.
                 await mutator.moveBoardToCategory(teamID, deleteBoard.id, deletedFromCategoryID, '')
-                showBoard(deleteBoard.id)
+                if (isViewingDeleted) {
+                    showBoard(deleteBoard.id)
+                }
             },
         )
-    }, [showBoard, deleteBoard, props.boards, props.categoryBoards.id, teamID])
+    }, [showBoard, deleteBoard, props.boards, props.categoryBoards.id, teamID, match, history, props.hideSidebar])
 
     const updateCategory = useCallback(async (value: boolean) => {
         const updatedCategory: Category = {
