@@ -274,11 +274,17 @@ func (s *Server) ServeExternalHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, transport mcpTransport) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodPost:
+		s.serveMCPPost(w, r, transport)
+	case http.MethodGet:
+		s.serveMCPGet(w, r, transport)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
+func (s *Server) serveMCPPost(w http.ResponseWriter, r *http.Request, transport mcpTransport) {
 	userID, err := s.authenticate(r, transport)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -308,6 +314,86 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, transport mcpT
 		return
 	}
 	writeJSON(w, resp)
+}
+
+// serveMCPGet implements the "Listening for Messages from the Server" leg of
+// the MCP Streamable HTTP transport (spec 2025-03-26). The spec lets a server
+// answer GET with either an SSE stream or 405; we pick SSE because the
+// mattermost-plugin-agents 2.0.0-rc7 client treats 405 as a fatal session
+// error and stops issuing tools/list & tools/call afterwards.
+//
+// We have no server-initiated messages to push today (no sampling, no
+// resumable streams, no async tool results), so the stream is just a
+// long-lived channel of `: keepalive` SSE comments. That's enough to keep
+// the SDK's session alive — when real server→client traffic appears later
+// we can hang it off the same loop.
+//
+// Other Accepts continue to receive 405 per spec, in case some future
+// client probes the endpoint with a non-stream Accept and wants to know
+// the server doesn't speak that variant.
+func (s *Server) serveMCPGet(w http.ResponseWriter, r *http.Request, transport mcpTransport) {
+	if !acceptsEventStream(r) {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authenticate(r, transport); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Inter-plugin transports route through Mattermost's plugin RPC
+		// which buffers the response — we can't stream there. Fall back to
+		// 405 so the client treats this as "no SSE here" rather than a hang.
+		http.Error(w, "streaming not supported on this transport", http.StatusMethodNotAllowed)
+		return
+	}
+
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	// nginx buffers text/event-stream by default; this header tells it to
+	// flush each chunk immediately. Harmless when no proxy is in front.
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+		return
+	}
+	flusher.Flush()
+
+	// 25s sits inside the 15-30s window the spec recommends and is well
+	// under the 60s default idle timeout most reverse proxies impose.
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func acceptsEventStream(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if accept == "" {
+		return false
+	}
+	for _, part := range strings.Split(accept, ",") {
+		media := strings.TrimSpace(strings.SplitN(part, ";", 2)[0])
+		if strings.EqualFold(media, "text/event-stream") || media == "*/*" {
+			return true
+		}
+	}
+	return false
 }
 
 // authenticate validates the request and returns the acting user's ID.
