@@ -36,6 +36,19 @@
         flex: 1 1 auto;
     }
 
+    // Wraps the chart container and the floating minimap so the minimap
+    // (position:absolute) is anchored relative to the chart cell. The
+    // chart container itself can't be the anchor because frappe-gantt
+    // calls `el.innerHTML = ''` on rebuild and would wipe React's nodes.
+    &__chart-wrap {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        display: flex;
+    }
+
     &__chart {
         flex: 1 1 auto;
         min-width: 0;
@@ -410,5 +423,36 @@
     .gantt .lower-text,
     .gantt .upper-text {
         fill: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+
+    // Phones: the full side panel (resource label + N property columns)
+    // squeezes the chart out of view. Trim it to just the leftmost
+    // resource column at a fixed compact width — the column is essential
+    // because it's the only place the swim-lane name is shown — and
+    // hide every property column. The user can still open a card to
+    // see those property values.
+    @media (max-width: 768px) {
+        .ResourceContainer__props {
+            // Override the parent width that's the sum of all column
+            // widths; we only display the first column now.
+            width: 110px !important;
+            max-width: 110px !important;
+        }
+
+        // Hide all but the first cell in each row (header + data).
+        .ResourceContainer__props-cell:not(:first-child) {
+            display: none;
+        }
+
+        // Override the inline `width` style set per cell so the resource
+        // column shrinks to match the new panel width.
+        .ResourceContainer__props-cell:first-child {
+            width: 110px !important;
+        }
+
+        // Resize grip is meaningless when the panel is fixed-width.
+        .ResourceContainer__props-grip {
+            display: none;
+        }
     }
 }

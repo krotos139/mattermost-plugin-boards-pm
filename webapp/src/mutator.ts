@@ -916,6 +916,45 @@ class Mutator {
         )
     }
 
+    async changeViewHierarchyPropertyId(boardId: string, viewId: string, oldId: string|undefined, newId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyPropertyId', newId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyPropertyId', oldId))
+            },
+            'hierarchy by',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewHierarchyLayout(boardId: string, viewId: string, oldLayout: string|undefined, newLayout: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyLayout', newLayout))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyLayout', oldLayout))
+            },
+            'hierarchy layout',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewHierarchyColorPropertyId(boardId: string, viewId: string, oldId: string|undefined, newId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyColorPropertyId', newId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('hierarchyColorPropertyId', oldId))
+            },
+            'hierarchy color by',
+            this.undoDisplayId,
+        )
+    }
+
     // Generic toggle for view.fields.collapsedOptionIds. The Resource view
     // uses this to remember which swim lanes are folded (one entry per
     // collapsed user / "__unassigned" id). Each view block has its own

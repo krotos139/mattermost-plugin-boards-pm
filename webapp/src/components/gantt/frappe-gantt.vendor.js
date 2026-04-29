@@ -6,6 +6,16 @@
 // map and tsconfig esModuleInterop interact badly with webpack 5 in
 // the Mattermost plugin environment, leaving the default export
 // unresolvable at runtime.
+//
+// LOCAL PATCH (search for `CSS.escape`): the upstream
+// mouseenter/mouseleave handlers in `setup_click_event` build a CSS
+// selector by template-string interpolating `task.id` directly, e.g.
+// `.highlight-${task.id}`. Resource view uses synthetic IDs like
+// `t|user1|cardId`; the `|` makes the resulting selector invalid CSS
+// and querySelector throws SyntaxError on every hover/leave. The
+// patch wraps the id with `CSS.escape()` and guards against a missing
+// highlight element (some bars genuinely have no highlight rect, e.g.
+// group aggregate bars in the Resource view).
 /* eslint-disable */
 const v = "year", k = "month", M = "day", D = "hour", T = "minute", L = "second", S = "millisecond", d = {
   parse_duration(n) {
@@ -537,11 +547,11 @@ class F {
           y: s.offsetY || s.layerY,
           task: this.task,
           target: this.$bar
-        }), this.gantt.$container.querySelector(`.highlight-${t}`).classList.remove("hide");
+        }), (() => { const _h = this.gantt.$container.querySelector(`.highlight-${CSS.escape(t)}`); _h && _h.classList.remove("hide"); })();
       }, 200);
     }), p.on(this.group, "mouseleave", () => {
       var s, r;
-      clearTimeout(e), this.gantt.options.popup_on === "hover" && ((r = (s = this.gantt.popup) == null ? void 0 : s.hide) == null || r.call(s)), this.gantt.$container.querySelector(`.highlight-${t}`).classList.add("hide");
+      clearTimeout(e), this.gantt.options.popup_on === "hover" && ((r = (s = this.gantt.popup) == null ? void 0 : s.hide) == null || r.call(s)), (() => { const _h = this.gantt.$container.querySelector(`.highlight-${CSS.escape(t)}`); _h && _h.classList.add("hide"); })();
     }), p.on(this.group, "click", () => {
       this.gantt.trigger_event("click", [this.task]);
     }), p.on(this.group, "dblclick", (s) => {

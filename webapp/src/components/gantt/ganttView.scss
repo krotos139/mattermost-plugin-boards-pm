@@ -29,6 +29,19 @@
         flex: 1 1 auto;
     }
 
+    // Wraps the chart container and the floating minimap so the minimap
+    // (position:absolute) is anchored relative to the chart cell. The
+    // chart container itself can't be the anchor because frappe-gantt
+    // calls `el.innerHTML = ''` on rebuild and would wipe React's nodes.
+    &__chart-wrap {
+        position: relative;
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+        display: flex;
+    }
+
     &__chart {
         flex: 1 1 auto;
         min-width: 0;
@@ -298,5 +311,15 @@
     .gantt .lower-text,
     .gantt .upper-text {
         fill: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+
+    // Phones: the side properties panel takes most of the screen and
+    // squeezes the chart out of view. Hide it entirely so users can
+    // still see the timeline; properties are still reachable via the
+    // card popup and by opening the card.
+    @media (max-width: 768px) {
+        .GanttContainer__props {
+            display: none;
+        }
     }
 }

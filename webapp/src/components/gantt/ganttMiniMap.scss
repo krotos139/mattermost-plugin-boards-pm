@@ -1,0 +1,27 @@
+.GanttMiniMap {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    background: rgb(var(--center-channel-bg-rgb));
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.18);
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+    cursor: crosshair;
+    user-select: none;
+    touch-action: none;
+
+    &__bg {
+        fill: rgba(var(--center-channel-color-rgb), 0.04);
+    }
+
+    // Viewport rectangle shows the visible window. pointer-events:none so
+    // the click goes to the underlying svg (handled by GanttMiniMap's
+    // onPointerDown), letting the user click anywhere inside the rect to
+    // re-center it.
+    &__viewport {
+        fill: rgba(var(--button-bg-rgb), 0.18);
+        stroke: rgba(var(--button-bg-rgb), 0.6);
+        stroke-width: 1;
+        pointer-events: none;
+    }
+}

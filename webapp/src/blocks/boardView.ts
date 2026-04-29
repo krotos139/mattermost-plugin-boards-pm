@@ -5,7 +5,12 @@
 import {Block, createBlock} from './block'
 import {FilterGroup, createFilterGroup} from './filterGroup'
 
-type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource'
+type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource' | 'hierarchy'
+
+// Hierarchy view: layout direction passed to dagre. Top-bottom mirrors the
+// PERT examples in the design doc; LR is handy for very deep trees that
+// would otherwise overflow vertically.
+type HierarchyLayout = 'TB' | 'LR' | 'BT' | 'RL'
 type ISortOption = { propertyId: '__title' | string, reversed: boolean }
 
 type KanbanCalculationFields = {
@@ -31,6 +36,16 @@ type BoardViewFields = {
     // assignees produces N rows in the Resource view (one per person);
     // a card with no assignee falls into a synthetic "Unassigned" group.
     resourcePropertyId?: string
+    // Hierarchy view: id of the Task / Multi task property that links a
+    // child card to its parent card(s). Each value is a card id; a Task
+    // value points to one parent, a Multi task value can point to many.
+    hierarchyPropertyId?: string
+    // Hierarchy view: dagre layout direction (top-bottom by default).
+    hierarchyLayout?: HierarchyLayout
+    // Hierarchy view: id of a select / multiSelect property whose option
+    // color is used to tint each node. Falls back to the option color
+    // configured on each select option.
+    hierarchyColorPropertyId?: string
     sortOptions: ISortOption[]
     visiblePropertyIds: string[]
     visibleOptionIds: string[]
@@ -60,6 +75,9 @@ function createBoardView(block?: Block): BoardView {
             progressPropertyId: block?.fields.progressPropertyId,
             colorPropertyId: block?.fields.colorPropertyId,
             resourcePropertyId: block?.fields.resourcePropertyId,
+            hierarchyPropertyId: block?.fields.hierarchyPropertyId,
+            hierarchyLayout: block?.fields.hierarchyLayout,
+            hierarchyColorPropertyId: block?.fields.hierarchyColorPropertyId,
             sortOptions: block?.fields.sortOptions?.map((o: ISortOption) => ({...o})) || [],
             visiblePropertyIds: block?.fields.visiblePropertyIds?.slice() || [],
             visibleOptionIds: block?.fields.visibleOptionIds?.slice() || [],
@@ -82,4 +100,4 @@ function sortBoardViewsAlphabetically(views: BoardView[]): BoardView[] {
     }).sort((v1, v2) => v1.title.localeCompare(v2.title)).map((v) => v.view)
 }
 
-export {BoardView, IViewType, ISortOption, sortBoardViewsAlphabetically, createBoardView, KanbanCalculationFields}
+export {BoardView, IViewType, ISortOption, HierarchyLayout, sortBoardViewsAlphabetically, createBoardView, KanbanCalculationFields}

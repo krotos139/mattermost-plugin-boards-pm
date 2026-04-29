@@ -55,6 +55,7 @@ import Table from './table/table'
 
 import CalendarFullView from './calendar/fullCalendar'
 import GanttView from './gantt/ganttView'
+import HierarchyView from './hierarchy/hierarchyView'
 import ResourceView from './resource/resourceView'
 
 import CardLimitNotification from './cardLimitNotification'
@@ -524,6 +525,15 @@ const CenterPanel = (props: Props) => {
                     activeView={props.activeView}
                     readonly={props.readonly}
                     dateDisplayProperty={props.dateDisplayProperty}
+                    showCard={showCard}
+                />}
+
+            {activeView.fields.viewType === 'hierarchy' &&
+                <HierarchyView
+                    board={props.board}
+                    cards={props.cards}
+                    activeView={props.activeView}
+                    readonly={props.readonly}
                     showCard={showCard}
                 />}
 

@@ -53,6 +53,8 @@ import {getBoardUsers} from '../../store/users'
 import {IUser} from '../../user'
 import PropertyValueElement from '../propertyValueElement'
 
+import GanttMiniMap from './ganttMiniMap'
+
 import './ganttView.scss'
 
 // Frappe-gantt layout constants — kept in sync with `defaults.js` in the
@@ -888,10 +890,19 @@ const GanttView = (props: Props): JSX.Element|null => {
                         </div>
                     </div>
                 )}
-                <div
-                    ref={containerRef}
-                    className='GanttContainer__chart'
-                />
+                <div className='GanttContainer__chart-wrap'>
+                    <div
+                        ref={containerRef}
+                        className='GanttContainer__chart'
+                    />
+                    {/* Minimap is a sibling of the chart container, not a
+                        child — frappe-gantt's `el.innerHTML = ''` rebuild
+                        path would otherwise wipe React's DOM nodes. */}
+                    <GanttMiniMap
+                        containerRef={containerRef}
+                        version={structuralSignature}
+                    />
+                </div>
             </div>
         </div>
     )

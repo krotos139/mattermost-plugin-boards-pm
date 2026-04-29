@@ -43,6 +43,9 @@ import ViewHeaderLinkedByMenu from './viewHeaderLinkedByMenu'
 import ViewHeaderProgressByMenu from './viewHeaderProgressByMenu'
 import ViewHeaderColorByMenu from './viewHeaderColorByMenu'
 import ViewHeaderResourceByMenu from './viewHeaderResourceByMenu'
+import ViewHeaderHierarchyByMenu from './viewHeaderHierarchyByMenu'
+import ViewHeaderHierarchyLayoutMenu from './viewHeaderHierarchyLayoutMenu'
+import ViewHeaderHierarchyColorByMenu from './viewHeaderHierarchyColorByMenu'
 import ViewHeaderSortMenu from './viewHeaderSortMenu'
 import ViewHeaderActionsMenu from './viewHeaderActionsMenu'
 import ViewHeaderSearch from './viewHeaderSearch'
@@ -84,7 +87,11 @@ const ViewHeader = (props: Props) => {
     // progress overlay configuration.
     const withProgressAndColor = activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource'
     const withResourceBy = activeView.fields.viewType === 'resource'
-    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource'
+    // Hierarchy view exposes its own trio of header menus (parent property,
+    // layout direction, node tint) and skips Sort entirely — node order is
+    // determined by the dagre layout.
+    const withHierarchyControls = activeView.fields.viewType === 'hierarchy'
+    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource' && activeView.fields.viewType !== 'hierarchy'
 
     // Gantt's "Linked by" lookup needs the resolved property template, not
     // just the id, so the button can show a human label and the menu can
@@ -105,6 +112,14 @@ const ViewHeader = (props: Props) => {
 
     const resourceProperty = withResourceBy && activeView.fields.resourcePropertyId ?
         board.cardProperties.find((p) => p.id === activeView.fields.resourcePropertyId) :
+        undefined
+
+    const hierarchyProperty = withHierarchyControls && activeView.fields.hierarchyPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.hierarchyPropertyId) :
+        undefined
+
+    const hierarchyColorProperty = withHierarchyControls && activeView.fields.hierarchyColorPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.hierarchyColorPropertyId) :
         undefined
 
     const [viewTitle, setViewTitle] = useState(activeView.title)
@@ -237,6 +252,25 @@ const ViewHeader = (props: Props) => {
                     properties={board.cardProperties}
                     activeView={activeView}
                     colorPropertyName={colorProperty?.name}
+                />}
+
+                {withHierarchyControls &&
+                <ViewHeaderHierarchyByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    hierarchyPropertyName={hierarchyProperty?.name}
+                />}
+
+                {withHierarchyControls &&
+                <ViewHeaderHierarchyLayoutMenu
+                    activeView={activeView}
+                />}
+
+                {withHierarchyControls &&
+                <ViewHeaderHierarchyColorByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    hierarchyColorPropertyName={hierarchyColorProperty?.name}
                 />}
 
                 {/* Filter */}

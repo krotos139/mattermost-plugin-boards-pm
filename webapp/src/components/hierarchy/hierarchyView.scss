@@ -1,0 +1,122 @@
+.HierarchyContainer {
+    // Same layout chain as Resource / Timeline: vertical flex column
+    // with overflow:hidden so reactflow's pan area fills the viewport
+    // without producing a phantom outer scrollbar.
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+
+    &--empty {
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+        font-size: 13px;
+        padding: 24px;
+    }
+
+    // Reactflow injects its own root; force it to fill the column so
+    // pan / zoom react to the full available area.
+    .react-flow {
+        flex: 1 1 auto;
+        min-height: 0;
+        background: rgba(var(--center-channel-color-rgb), 0.04);
+    }
+}
+
+// Custom node rendered for each card. Padding + rounded corners + a
+// subtle shadow keep the look close to Mattermost surface chrome.
+.HierarchyNode {
+    width: 240px;
+    border-radius: 6px;
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.18);
+    background: var(--prop-default, rgb(var(--center-channel-bg-rgb)));
+    color: rgb(var(--center-channel-color-rgb));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    font-size: 12px;
+    overflow: hidden;
+    cursor: default;
+
+    &__title {
+        padding: 6px 10px;
+        font-weight: 600;
+        font-size: 13px;
+        background: rgba(0, 0, 0, 0.06);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    &__icon {
+        flex: 0 0 auto;
+        font-size: 14px;
+        line-height: 1;
+    }
+
+    &__title-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    &__props {
+        padding: 4px 10px 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    &__prop {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        line-height: 16px;
+        min-height: 18px;
+    }
+
+    &__prop-label {
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+        flex: 0 0 auto;
+        max-width: 40%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    &__prop-value {
+        flex: 1 1 auto;
+        min-width: 0;
+        color: rgb(var(--center-channel-color-rgb));
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        // PropertyValueElement renders an Editable that wants to grab the
+        // full row width; clamp it so the node stays compact and the label
+        // column stays visible.
+        > * {
+            max-width: 100%;
+        }
+
+        // Editable inputs in readonly mode still render an empty
+        // placeholder div with min-height; trim that so empty values
+        // don't push the row taller.
+        .Editable {
+            min-height: 16px;
+            font-size: 11px;
+        }
+    }
+}
+
+// Reactflow controls / minimap blend a bit more tightly with Mattermost
+// surfaces — the default white panel looks washed out.
+.HierarchyContainer .react-flow__minimap,
+.HierarchyContainer .react-flow__controls {
+    background: rgb(var(--center-channel-bg-rgb));
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.12);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}

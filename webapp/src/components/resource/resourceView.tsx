@@ -54,6 +54,8 @@ import GanttImport, {GanttTask} from '../gantt/frappe-gantt.vendor.js'
 
 import '../gantt/frappe-gantt.vendor.css'
 
+import GanttMiniMap from '../gantt/ganttMiniMap'
+
 import {DatePropertyType} from '../../properties/types'
 import mutator from '../../mutator'
 import {Board, IPropertyTemplate} from '../../blocks/board'
@@ -1425,10 +1427,19 @@ const ResourceView = (props: Props): JSX.Element|null => {
                         </div>
                     </div>
                 </div>
-                <div
-                    ref={containerRef}
-                    className='ResourceContainer__chart'
-                />
+                <div className='ResourceContainer__chart-wrap'>
+                    <div
+                        ref={containerRef}
+                        className='ResourceContainer__chart'
+                    />
+                    {/* Minimap is a sibling of the chart container, not a
+                        child — frappe-gantt's `el.innerHTML = ''` rebuild
+                        path would otherwise wipe React's DOM nodes. */}
+                    <GanttMiniMap
+                        containerRef={containerRef}
+                        version={structuralSignature}
+                    />
+                </div>
             </div>
         </div>
     )
