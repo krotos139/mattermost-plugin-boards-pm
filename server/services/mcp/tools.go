@@ -1014,13 +1014,57 @@ func (s *Server) toolCreateBoard() toolEntry {
 			if err != nil {
 				return toolError("create board: %v", err), nil
 			}
-			return toolJSON(map[string]interface{}{
+
+			// A board with no view blocks renders as a blank screen in the
+			// webapp — `getCurrentView` returns null, the center panel
+			// dispatches to nothing, and the user sees an empty pane. The
+			// UI's "new board" path (mutator.addEmptyBoard) inserts a
+			// default Board view alongside the board in a single
+			// createBoardsAndBlocks transaction; we don't have access to
+			// that batched call from the Backend interface, so insert one
+			// view block separately. If this fails the board still exists,
+			// so we just log the inner error into the tool result and let
+			// the agent decide whether to retry / fall back to UI.
+			now := utils.GetMillis()
+			defaultView := &model.Block{
+				ID:         utils.NewID(utils.IDTypeView),
+				BoardID:    created.ID,
+				ParentID:   created.ID,
+				CreatedBy:  userID,
+				ModifiedBy: userID,
+				Schema:     1,
+				Type:       model.TypeView,
+				Title:      "Board view",
+				CreateAt:   now,
+				UpdateAt:   now,
+				Fields: map[string]interface{}{
+					"viewType":           "board",
+					"sortOptions":        []interface{}{},
+					"visiblePropertyIds": []interface{}{},
+					"visibleOptionIds":   []interface{}{},
+					"hiddenOptionIds":    []interface{}{},
+					"collapsedOptionIds": []interface{}{},
+					"filter":             map[string]interface{}{"operation": "and", "filters": []interface{}{}},
+					"cardOrder":          []interface{}{},
+					"columnWidths":       map[string]interface{}{},
+					"columnCalculations": map[string]interface{}{},
+					"kanbanCalculations": map[string]interface{}{},
+					"defaultTemplateId":  "",
+				},
+			}
+			viewErr := s.backend.InsertBlockAndNotify(defaultView, userID, false)
+
+			result := map[string]interface{}{
 				"ok":         true,
 				"board":      summarizeBoard(created),
 				"board_link": s.boardLinkFor(created),
 				"team_id":    created.TeamID,
 				"board_id":   created.ID,
-			})
+			}
+			if viewErr != nil {
+				result["default_view_error"] = viewErr.Error()
+			}
+			return toolJSON(result)
 		},
 	}
 }
