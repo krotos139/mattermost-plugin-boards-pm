@@ -955,6 +955,54 @@ class Mutator {
         )
     }
 
+    async changeViewCFDPropertyId(boardId: string, viewId: string, oldId: string|undefined, newId: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('cfdPropertyId', newId))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('cfdPropertyId', oldId))
+            },
+            'cfd group by',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewCFDDateRange(boardId: string, viewId: string, oldRange: string|undefined, newRange: string|undefined): Promise<void> {
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('cfdDateRange', newRange))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, patchOrDelete('cfdDateRange', oldRange))
+            },
+            'cfd date range',
+            this.undoDisplayId,
+        )
+    }
+
+    async changeViewCFDHiddenSeriesKeys(boardId: string, viewId: string, oldKeys: string[]|undefined, newKeys: string[]|undefined): Promise<void> {
+        // patchOrDelete only handles scalar values, so build the patch
+        // directly here. An empty / undefined `newKeys` deletes the field
+        // entirely so view.fields stays clean after "show all".
+        const buildPatch = (keys: string[]|undefined) => {
+            if (!keys || keys.length === 0) {
+                return {deletedFields: ['cfdHiddenSeriesKeys']}
+            }
+            return {updatedFields: {cfdHiddenSeriesKeys: keys}}
+        }
+        await undoManager.perform(
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, buildPatch(newKeys))
+            },
+            async () => {
+                await octoClient.patchBlock(boardId, viewId, buildPatch(oldKeys))
+            },
+            'cfd hidden states',
+            this.undoDisplayId,
+        )
+    }
+
     // Generic toggle for view.fields.collapsedOptionIds. The Resource view
     // uses this to remember which swim lanes are folded (one entry per
     // collapsed user / "__unassigned" id). Each view block has its own

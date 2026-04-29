@@ -46,6 +46,9 @@ import ViewHeaderResourceByMenu from './viewHeaderResourceByMenu'
 import ViewHeaderHierarchyByMenu from './viewHeaderHierarchyByMenu'
 import ViewHeaderHierarchyLayoutMenu from './viewHeaderHierarchyLayoutMenu'
 import ViewHeaderHierarchyColorByMenu from './viewHeaderHierarchyColorByMenu'
+import ViewHeaderCFDGroupByMenu from './viewHeaderCFDGroupByMenu'
+import ViewHeaderCFDDateRangeMenu from './viewHeaderCFDDateRangeMenu'
+import ViewHeaderCFDStatesMenu from './viewHeaderCFDStatesMenu'
 import ViewHeaderSortMenu from './viewHeaderSortMenu'
 import ViewHeaderActionsMenu from './viewHeaderActionsMenu'
 import ViewHeaderSearch from './viewHeaderSearch'
@@ -91,7 +94,11 @@ const ViewHeader = (props: Props) => {
     // layout direction, node tint) and skips Sort entirely — node order is
     // determined by the dagre layout.
     const withHierarchyControls = activeView.fields.viewType === 'hierarchy'
-    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource' && activeView.fields.viewType !== 'hierarchy'
+    // CFD has its own pair of header menus (group-by property, date range)
+    // and skips Sort + Group + Properties — its data axis is time, not a
+    // card list, so the standard controls don't apply.
+    const withCFDControls = activeView.fields.viewType === 'cfd'
+    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource' && activeView.fields.viewType !== 'hierarchy' && activeView.fields.viewType !== 'cfd'
 
     // Gantt's "Linked by" lookup needs the resolved property template, not
     // just the id, so the button can show a human label and the menu can
@@ -120,6 +127,10 @@ const ViewHeader = (props: Props) => {
 
     const hierarchyColorProperty = withHierarchyControls && activeView.fields.hierarchyColorPropertyId ?
         board.cardProperties.find((p) => p.id === activeView.fields.hierarchyColorPropertyId) :
+        undefined
+
+    const cfdProperty = withCFDControls && activeView.fields.cfdPropertyId ?
+        board.cardProperties.find((p) => p.id === activeView.fields.cfdPropertyId) :
         undefined
 
     const [viewTitle, setViewTitle] = useState(activeView.title)
@@ -201,12 +212,18 @@ const ViewHeader = (props: Props) => {
 
             {!props.readonly && canEditBoardProperties &&
             <>
-                {/* Card properties */}
+                {/* Card properties — hidden on CFD because the chart's
+                    bands are driven by the cfdPropertyId, not by the
+                    visible-property list, and exposing the Properties
+                    menu suggested a setting the user could change but
+                    that did nothing on this view. */}
 
-                <ViewHeaderPropertiesMenu
-                    properties={board.cardProperties}
-                    activeView={activeView}
-                />
+                {!withCFDControls && (
+                    <ViewHeaderPropertiesMenu
+                        properties={board.cardProperties}
+                        activeView={activeView}
+                    />
+                )}
 
                 {/* Group by */}
 
@@ -271,6 +288,24 @@ const ViewHeader = (props: Props) => {
                     properties={board.cardProperties}
                     activeView={activeView}
                     hierarchyColorPropertyName={hierarchyColorProperty?.name}
+                />}
+
+                {withCFDControls &&
+                <ViewHeaderCFDGroupByMenu
+                    properties={board.cardProperties}
+                    activeView={activeView}
+                    cfdPropertyName={cfdProperty?.name}
+                />}
+
+                {withCFDControls &&
+                <ViewHeaderCFDDateRangeMenu
+                    activeView={activeView}
+                />}
+
+                {withCFDControls &&
+                <ViewHeaderCFDStatesMenu
+                    activeView={activeView}
+                    cfdProperty={cfdProperty}
                 />}
 
                 {/* Filter */}

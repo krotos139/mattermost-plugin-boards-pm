@@ -1,0 +1,105 @@
+// Copyright (c) 2020-present Mattermost, Inc. All Rights Reserved.
+// See LICENSE.txt for license information.
+
+.CFDContainer {
+    // Mirrors HierarchyContainer / GanttContainer / ResourceContainer:
+    // `flex: 1` (basis 0) is what makes the column actually fill the
+    // BoardComponent's vertical space. With flex-basis: auto + the
+    // ApexCharts child sizing itself by parent height, the column would
+    // collapse to ~0 height.
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 0;
+
+    &__chart {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    &__empty {
+        display: flex;
+        flex: 1 1 auto;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+        font-size: 14px;
+        text-align: center;
+        line-height: 1.4;
+    }
+
+    // Dial back ApexCharts' default toolbar styling so the buttons blend
+    // with the rest of the board UI rather than fighting Mattermost
+    // chrome with their own background and shadow.
+    .apexcharts-toolbar {
+        opacity: 0.65;
+
+        &:hover {
+            opacity: 1;
+        }
+    }
+
+
+    .apexcharts-tooltip {
+        font-size: 11px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+        // The library wraps our custom HTML in its own .apexcharts-tooltip
+        // box, which by default reserves a chunky default-tooltip layout
+        // (title bar + colored marker column). Strip that down so only
+        // our compact rows render.
+        > * {
+            padding: 0 !important;
+        }
+    }
+}
+
+.CFDTooltip {
+    padding: 6px 8px;
+    font-family: inherit;
+    line-height: 1.35;
+    color: rgba(var(--center-channel-color-rgb), 0.92);
+
+    &__date {
+        font-weight: 600;
+        font-size: 11px;
+        margin-bottom: 3px;
+        color: rgba(var(--center-channel-color-rgb), 0.7);
+    }
+
+    &__row {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+    }
+
+    &__swatch {
+        width: 8px;
+        height: 8px;
+        border-radius: 1px;
+        flex: 0 0 auto;
+    }
+
+    &__count {
+        margin-left: 6px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
+
+    &__total {
+        margin-top: 3px;
+        padding-top: 3px;
+        border-top: 1px solid rgba(var(--center-channel-color-rgb), 0.15);
+        font-weight: 600;
+    }
+
+    &__swatch--empty {
+        background: transparent !important;
+    }
+}

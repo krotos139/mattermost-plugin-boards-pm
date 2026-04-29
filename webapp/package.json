@@ -41,6 +41,7 @@
 		"@mattermost/desktop-api": "5.10.0-2",
 		"@reduxjs/toolkit": "^1.8.0",
 		"@tippyjs/react": "4.2.6",
+		"apexcharts": "~3.54.0",
 		"color": "^4.2.1",
 		"dagre": "^0.8.5",
 		"draft-js": "^0.11.7",

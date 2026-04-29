@@ -5,12 +5,16 @@
 import {Block, createBlock} from './block'
 import {FilterGroup, createFilterGroup} from './filterGroup'
 
-type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource' | 'hierarchy'
+type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource' | 'hierarchy' | 'cfd'
 
 // Hierarchy view: layout direction passed to dagre. Top-bottom mirrors the
 // PERT examples in the design doc; LR is handy for very deep trees that
 // would otherwise overflow vertically.
 type HierarchyLayout = 'TB' | 'LR' | 'BT' | 'RL'
+
+// CFD view: how far back the chart extends. 'all' falls back to the
+// earliest history row; 'custom' uses cfdDateFrom/cfdDateTo.
+type CFDDateRange = 'last7' | 'last30' | 'last90' | 'last365' | 'all' | 'custom'
 type ISortOption = { propertyId: '__title' | string, reversed: boolean }
 
 type KanbanCalculationFields = {
@@ -46,6 +50,20 @@ type BoardViewFields = {
     // color is used to tint each node. Falls back to the option color
     // configured on each select option.
     hierarchyColorPropertyId?: string
+    // CFD view: id of the select / multiSelect / person* property the chart
+    // groups by. Each option/user becomes one band of the stacked area.
+    cfdPropertyId?: string
+    // CFD view: rolling-window selector. When 'custom', cfdDateFrom and
+    // cfdDateTo specify the range explicitly (epoch ms).
+    cfdDateRange?: CFDDateRange
+    cfdDateFrom?: number
+    cfdDateTo?: number
+    // CFD view: option ids / "__none" the user has hidden via the
+    // States menu. Bands present in this list are filtered out before
+    // the chart is rendered, so the user can keep a focused view on
+    // active states (e.g. hide Done so the chart isn't dominated by
+    // completed cards piling up at the top).
+    cfdHiddenSeriesKeys?: string[]
     sortOptions: ISortOption[]
     visiblePropertyIds: string[]
     visibleOptionIds: string[]
@@ -78,6 +96,11 @@ function createBoardView(block?: Block): BoardView {
             hierarchyPropertyId: block?.fields.hierarchyPropertyId,
             hierarchyLayout: block?.fields.hierarchyLayout,
             hierarchyColorPropertyId: block?.fields.hierarchyColorPropertyId,
+            cfdPropertyId: block?.fields.cfdPropertyId,
+            cfdDateRange: block?.fields.cfdDateRange,
+            cfdDateFrom: block?.fields.cfdDateFrom,
+            cfdDateTo: block?.fields.cfdDateTo,
+            cfdHiddenSeriesKeys: block?.fields.cfdHiddenSeriesKeys?.slice(),
             sortOptions: block?.fields.sortOptions?.map((o: ISortOption) => ({...o})) || [],
             visiblePropertyIds: block?.fields.visiblePropertyIds?.slice() || [],
             visibleOptionIds: block?.fields.visibleOptionIds?.slice() || [],
@@ -100,4 +123,4 @@ function sortBoardViewsAlphabetically(views: BoardView[]): BoardView[] {
     }).sort((v1, v2) => v1.title.localeCompare(v2.title)).map((v) => v.view)
 }
 
-export {BoardView, IViewType, ISortOption, HierarchyLayout, sortBoardViewsAlphabetically, createBoardView, KanbanCalculationFields}
+export {BoardView, IViewType, ISortOption, HierarchyLayout, CFDDateRange, sortBoardViewsAlphabetically, createBoardView, KanbanCalculationFields}

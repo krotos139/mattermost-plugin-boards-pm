@@ -57,6 +57,7 @@ import CalendarFullView from './calendar/fullCalendar'
 import GanttView from './gantt/ganttView'
 import HierarchyView from './hierarchy/hierarchyView'
 import ResourceView from './resource/resourceView'
+import CFDView from './cfd/cfdView'
 
 import CardLimitNotification from './cardLimitNotification'
 
@@ -535,6 +536,13 @@ const CenterPanel = (props: Props) => {
                     activeView={props.activeView}
                     readonly={props.readonly}
                     showCard={showCard}
+                />}
+
+            {activeView.fields.viewType === 'cfd' &&
+                <CFDView
+                    board={props.board}
+                    activeView={props.activeView}
+                    readonly={props.readonly}
                 />}
 
             {activeView.fields.viewType === 'gallery' &&

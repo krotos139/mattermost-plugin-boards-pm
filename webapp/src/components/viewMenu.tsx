@@ -20,6 +20,7 @@ import DuplicateIcon from '../widgets/icons/duplicate'
 import GalleryIcon from '../widgets/icons/gallery'
 import GanttIcon from '../widgets/icons/gantt'
 import HierarchyIcon from '../widgets/icons/hierarchy'
+import CFDIcon from '../widgets/icons/cfd'
 import ResourceIcon from '../widgets/icons/resource'
 import TableIcon from '../widgets/icons/table'
 import Menu from '../widgets/menu'
@@ -289,6 +290,45 @@ const ViewMenu = (props: Props) => {
             })
     }, [props.board, props.activeView, props.intl, showView])
 
+    const handleAddViewCFD = useCallback(() => {
+        const {board, activeView, intl} = props
+
+        Utils.log('addview-cfd')
+
+        const view = createBoardView()
+        view.title = intl.formatMessage({id: 'View.NewCFDTitle', defaultMessage: 'CFD view'})
+        view.fields.viewType = 'cfd'
+        view.parentId = board.id
+        view.boardId = board.id
+        view.fields.visiblePropertyIds = [Constants.titleColumnId]
+
+        const oldViewId = activeView.id
+
+        // Pre-pick the first select / multiSelect (commonly "Status") so a
+        // fresh CFD view renders something out of the gate. Falls through
+        // to the first person property if there are no selects on the board.
+        view.fields.cfdPropertyId = board.cardProperties.find((o: IPropertyTemplate) =>
+            o.type === 'select' || o.type === 'multiSelect')?.id ||
+            board.cardProperties.find((o: IPropertyTemplate) =>
+                o.type === 'person' || o.type === 'multiPerson' ||
+                o.type === 'personNotify' || o.type === 'multiPersonNotify')?.id
+        view.fields.cfdDateRange = 'last30'
+
+        mutator.insertBlock(
+            view.boardId,
+            view,
+            'add view',
+            async (block: Block) => {
+                setTimeout(() => {
+                    Utils.log(`showView: ${block.id}`)
+                    showView(block.id)
+                }, 120)
+            },
+            async () => {
+                showView(oldViewId)
+            })
+    }, [props.board, props.activeView, props.intl, showView])
+
     const handleAddViewResource = useCallback(() => {
         const {board, activeView, intl} = props
 
@@ -364,6 +404,7 @@ const ViewMenu = (props: Props) => {
         case 'gantt': return <GanttIcon/>
         case 'resource': return <ResourceIcon/>
         case 'hierarchy': return <HierarchyIcon/>
+        case 'cfd': return <CFDIcon/>
         default: return <div/>
         }
     }
@@ -453,6 +494,12 @@ const ViewMenu = (props: Props) => {
                                 name={intl.formatMessage({id: 'View.Hierarchy', defaultMessage: 'Hierarchy'})}
                                 icon={<HierarchyIcon/>}
                                 onClick={handleAddViewHierarchy}
+                            />
+                            <Menu.Text
+                                id='cfd'
+                                name={intl.formatMessage({id: 'View.CFD', defaultMessage: 'Cumulative Flow'})}
+                                icon={<CFDIcon/>}
+                                onClick={handleAddViewCFD}
                             />
                         </div>
                     </Menu.SubMenu>

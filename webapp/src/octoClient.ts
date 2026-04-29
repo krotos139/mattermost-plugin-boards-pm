@@ -22,6 +22,7 @@ import {BoardsCloudLimits} from './boardsCloudLimits'
 import {TopBoardResponse} from './insights'
 import {BoardSiteStatistics} from './statistics'
 import {CardHistoryEvent} from './components/cardDetail/cardHistory'
+import {CFDResult} from './components/cfd/cfdTypes'
 
 //
 // OctoClient is the client interface to the server APIs
@@ -775,6 +776,25 @@ class OctoClient {
         }
         const events = (await this.getJson(response, [])) as CardHistoryEvent[]
         return events || []
+    }
+
+    async getCFD(boardID: string, propertyID: string, from?: number, to?: number): Promise<CFDResult | undefined> {
+        const params = new URLSearchParams({propertyId: propertyID})
+        if (from && from > 0) {
+            params.set('from', String(from))
+        }
+        if (to && to > 0) {
+            params.set('to', String(to))
+        }
+        const path = `/api/v2/boards/${boardID}/cfd?${params.toString()}`
+        const response = await fetch(this.getBaseURL() + path, {
+            method: 'GET',
+            headers: this.headers(),
+        })
+        if (response.status !== 200) {
+            return undefined
+        }
+        return (await this.getJson(response, undefined)) as CFDResult | undefined
     }
 
     async getBoard(boardID: string): Promise<Board | undefined> {
