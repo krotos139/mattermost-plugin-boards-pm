@@ -35,6 +35,7 @@ import GanttIcon from '../../widgets/icons/gantt'
 import ResourceIcon from '../../widgets/icons/resource'
 import HierarchyIcon from '../../widgets/icons/hierarchy'
 import CFDIcon from '../../widgets/icons/cfd'
+import SchedulerIcon from '../../widgets/icons/scheduler'
 
 import {getCurrentTeam} from '../../store/teams'
 import {Permission} from '../../constants'
@@ -60,6 +61,7 @@ const iconForViewType = (viewType: IViewType): JSX.Element => {
     case 'resource': return <ResourceIcon/>
     case 'hierarchy': return <HierarchyIcon/>
     case 'cfd': return <CFDIcon/>
+    case 'scheduler': return <SchedulerIcon/>
     default: return <div/>
     }
 }

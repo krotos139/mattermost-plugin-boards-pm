@@ -18,9 +18,9 @@ const manifestStr = `
   "description": "Mattermost Boards plugin with project-management extensions: Timeline view, deadlines + DM reminders, dashboard boards, mobile login handoff.",
   "homepage_url": "https://github.com/krotos139/mattermost-plugin-boards-pm",
   "support_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/issues",
-  "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.5.0",
+  "release_notes_url": "https://github.com/krotos139/mattermost-plugin-boards-pm/releases/tag/v1.6.0",
   "icon_path": "assets/starter-template-icon.svg",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "min_server_version": "10.7.0",
   "server": {
     "executables": {
@@ -46,7 +46,8 @@ const manifestStr = `
         "help_text": "This allows board editors to share boards that can be accessed by anyone with the link.",
         "placeholder": "",
         "default": false,
-        "hosting": ""
+        "hosting": "",
+        "secret": false
       },
       {
         "key": "EnableMCPServer",
@@ -55,7 +56,8 @@ const manifestStr = `
         "help_text": "Run a Model Context Protocol server so AI agents can drive Boards. Users mint personal API keys with the /boards getapi slash command.",
         "placeholder": "",
         "default": false,
-        "hosting": ""
+        "hosting": "",
+        "secret": false
       },
       {
         "key": "MCPListenAddress",
@@ -64,7 +66,8 @@ const manifestStr = `
         "help_text": "host:port for the MCP listener. Default 127.0.0.1:8975 (loopback only). Use 0.0.0.0:\u003cport\u003e to accept connections from outside the host — every TCP request must then carry an API key.",
         "placeholder": "",
         "default": "127.0.0.1:8975",
-        "hosting": ""
+        "hosting": "",
+        "secret": false
       },
       {
         "key": "MCPRequireBearerOnLoopback",
@@ -73,7 +76,8 @@ const manifestStr = `
         "help_text": "Hardened mode: even local 127.0.0.1 callers must present a Bearer key. Off by default.",
         "placeholder": "",
         "default": false,
-        "hosting": ""
+        "hosting": "",
+        "secret": false
       },
       {
         "key": "MCPKeysTable",
@@ -82,9 +86,11 @@ const manifestStr = `
         "help_text": "",
         "placeholder": "",
         "default": null,
-        "hosting": ""
+        "hosting": "",
+        "secret": false
       }
-    ]
+    ],
+    "sections": null
   }
 }
 `

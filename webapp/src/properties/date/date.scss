@@ -1,10 +1,23 @@
 .DateRange {
     .inputContainer {
         display: flex;
+        flex-wrap: wrap;
 
         .Editable {
             width: 50% !important;
         }
+    }
+
+    // Native time picker rendered alongside each date field when the
+    // "Include time" toggle is on. Inherits the rest of .inputContainer's
+    // styling so a from + from-time + to + to-time row wraps cleanly when
+    // the modal is narrow.
+    .DateRange__timeInput {
+        width: auto;
+        min-width: 80px;
+        flex: 0 0 auto;
+        font: inherit;
+        padding: 2px 4px;
     }
 
     input {

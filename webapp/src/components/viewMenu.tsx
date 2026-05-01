@@ -21,6 +21,7 @@ import GalleryIcon from '../widgets/icons/gallery'
 import GanttIcon from '../widgets/icons/gantt'
 import HierarchyIcon from '../widgets/icons/hierarchy'
 import CFDIcon from '../widgets/icons/cfd'
+import SchedulerIcon from '../widgets/icons/scheduler'
 import ResourceIcon from '../widgets/icons/resource'
 import TableIcon from '../widgets/icons/table'
 import Menu from '../widgets/menu'
@@ -368,6 +369,41 @@ const ViewMenu = (props: Props) => {
             })
     }, [props.board, props.activeView, props.intl, showView])
 
+    const handleAddViewScheduler = useCallback(() => {
+        const {board, activeView, intl} = props
+
+        Utils.log('addview-scheduler')
+
+        const view = createBoardView()
+        view.title = intl.formatMessage({id: 'View.NewSchedulerTitle', defaultMessage: 'Scheduler view'})
+        view.fields.viewType = 'scheduler'
+        view.parentId = board.id
+        view.boardId = board.id
+        view.fields.visiblePropertyIds = [Constants.titleColumnId]
+
+        const oldViewId = activeView.id
+
+        // Pre-pick the first date property so a fresh Scheduler view renders
+        // a useful grid out of the gate. Color stays unset — the user can
+        // pick one via the "Color by" header menu, and unset events fall
+        // back to the (no value) calendar entry inside the view.
+        view.fields.dateDisplayPropertyId = board.cardProperties.find((o: IPropertyTemplate) => o.type === 'date')?.id
+
+        mutator.insertBlock(
+            view.boardId,
+            view,
+            'add view',
+            async (block: Block) => {
+                setTimeout(() => {
+                    Utils.log(`showView: ${block.id}`)
+                    showView(block.id)
+                }, 120)
+            },
+            async () => {
+                showView(oldViewId)
+            })
+    }, [props.board, props.activeView, props.intl, showView])
+
     const {views, intl} = props
 
     const duplicateViewText = intl.formatMessage({
@@ -405,6 +441,7 @@ const ViewMenu = (props: Props) => {
         case 'resource': return <ResourceIcon/>
         case 'hierarchy': return <HierarchyIcon/>
         case 'cfd': return <CFDIcon/>
+        case 'scheduler': return <SchedulerIcon/>
         default: return <div/>
         }
     }
@@ -500,6 +537,12 @@ const ViewMenu = (props: Props) => {
                                 name={intl.formatMessage({id: 'View.CFD', defaultMessage: 'Cumulative Flow'})}
                                 icon={<CFDIcon/>}
                                 onClick={handleAddViewCFD}
+                            />
+                            <Menu.Text
+                                id='scheduler'
+                                name={intl.formatMessage({id: 'View.Scheduler', defaultMessage: 'Scheduler'})}
+                                icon={<SchedulerIcon/>}
+                                onClick={handleAddViewScheduler}
                             />
                         </div>
                     </Menu.SubMenu>

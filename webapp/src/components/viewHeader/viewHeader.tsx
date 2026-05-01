@@ -83,12 +83,16 @@ const ViewHeader = (props: Props) => {
     const isDashboard = Boolean((board.properties as Record<string, unknown> | undefined)?.dashboardKind)
 
     const withGroupBy = activeView.fields.viewType === 'board' || activeView.fields.viewType === 'table'
-    const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource'
+    const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource' || activeView.fields.viewType === 'scheduler'
     const withLinkedBy = activeView.fields.viewType === 'gantt'
     // Progress / color are reused on both Timeline (Gantt) and Resource
     // views — both render bars and benefit from the same per-bar fill /
     // progress overlay configuration.
     const withProgressAndColor = activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource'
+    // Scheduler picks the per-event color from a Select property too, but
+    // doesn't have a "progress" concept — separate predicate keeps the two
+    // controls grouped only where they're both meaningful.
+    const withColorBy = withProgressAndColor || activeView.fields.viewType === 'scheduler'
     const withResourceBy = activeView.fields.viewType === 'resource'
     // Hierarchy view exposes its own trio of header menus (parent property,
     // layout direction, node tint) and skips Sort entirely — node order is
@@ -98,7 +102,7 @@ const ViewHeader = (props: Props) => {
     // and skips Sort + Group + Properties — its data axis is time, not a
     // card list, so the standard controls don't apply.
     const withCFDControls = activeView.fields.viewType === 'cfd'
-    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource' && activeView.fields.viewType !== 'hierarchy' && activeView.fields.viewType !== 'cfd'
+    const withSortBy = activeView.fields.viewType !== 'calendar' && activeView.fields.viewType !== 'gantt' && activeView.fields.viewType !== 'resource' && activeView.fields.viewType !== 'hierarchy' && activeView.fields.viewType !== 'cfd' && activeView.fields.viewType !== 'scheduler'
 
     // Gantt's "Linked by" lookup needs the resolved property template, not
     // just the id, so the button can show a human label and the menu can
@@ -113,7 +117,7 @@ const ViewHeader = (props: Props) => {
         board.cardProperties.find((p) => p.id === activeView.fields.progressPropertyId) :
         undefined
 
-    const colorProperty = withProgressAndColor && activeView.fields.colorPropertyId ?
+    const colorProperty = withColorBy && activeView.fields.colorPropertyId ?
         board.cardProperties.find((p) => p.id === activeView.fields.colorPropertyId) :
         undefined
 
@@ -264,7 +268,7 @@ const ViewHeader = (props: Props) => {
                     progressPropertyName={progressProperty?.name}
                 />}
 
-                {withProgressAndColor &&
+                {withColorBy &&
                 <ViewHeaderColorByMenu
                     properties={board.cardProperties}
                     activeView={activeView}

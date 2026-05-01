@@ -1,0 +1,151 @@
+// Copyright (c) 2020-present Mattermost, Inc. All Rights Reserved.
+// See LICENSE.txt for license information.
+
+.YearView {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+    padding: 8px 12px 24px 12px;
+    color: rgb(var(--center-channel-color-rgb));
+
+    &__header {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 8px 0 16px 0;
+    }
+
+    &__title {
+        font-size: 18px;
+        font-weight: 600;
+        min-width: 64px;
+        text-align: center;
+    }
+
+    &__nav {
+        font-size: 18px;
+        background: transparent;
+        border: 1px solid rgba(var(--center-channel-color-rgb), 0.2);
+        border-radius: 4px;
+        padding: 0 10px;
+        cursor: pointer;
+        color: inherit;
+
+        &:hover {
+            background-color: rgba(var(--button-bg-rgb), 0.08);
+        }
+    }
+
+    // Responsive 12-month grid — 4×3 on wide screens, 3×4 on medium,
+    // 2×6 on narrow, 1×12 on phones. The minmax floor is calibrated so a
+    // mini-month never scales below the point where the day-cell's
+    // event-dot becomes invisible.
+    &__months {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+    }
+
+    &__month {
+        display: flex;
+        flex-direction: column;
+        background: rgba(var(--center-channel-bg-rgb), 1);
+        border: 1px solid rgba(var(--center-channel-color-rgb), 0.08);
+        border-radius: 6px;
+        padding: 8px 10px 12px 10px;
+    }
+
+    &__monthName {
+        font-size: 14px;
+        font-weight: 600;
+        text-align: center;
+        padding: 4px 0 8px 0;
+        text-transform: capitalize;
+    }
+
+    &__weekdays {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 0;
+        font-size: 10px;
+        text-transform: uppercase;
+        color: rgba(var(--center-channel-color-rgb), 0.5);
+        text-align: center;
+        padding-bottom: 4px;
+    }
+
+    &__weekday {
+        padding: 2px 0;
+    }
+
+    &__days {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 1px;
+    }
+
+    &__day {
+        position: relative;
+        background: transparent;
+        border: none;
+        padding: 4px 0 6px 0;
+        font: inherit;
+        cursor: pointer;
+        color: inherit;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 24px;
+        border-radius: 4px;
+
+        &:hover:not(.YearView__day--empty) {
+            background-color: rgba(var(--button-bg-rgb), 0.08);
+        }
+
+        &--empty {
+            cursor: default;
+            visibility: hidden;
+        }
+
+        &--today {
+            color: rgb(var(--button-bg-rgb));
+            font-weight: 700;
+        }
+
+        &--hasEvents {
+            font-weight: 600;
+        }
+    }
+
+    &__dayNumber {
+        font-size: 11px;
+        line-height: 1;
+    }
+
+    // Event-presence indicators. One dot per unique event color landing
+    // on this day — capped at 4 in the renderer so the row stays inside
+    // the cell at 220px-wide mini-month tiles. The flex row is centered
+    // under the day number; its small gap keeps the dots distinguishable
+    // even at 5px.
+    &__dots {
+        display: flex;
+        flex-direction: row;
+        gap: 2px;
+        margin-top: 2px;
+        justify-content: center;
+        align-items: center;
+    }
+
+    &__dot {
+        display: block;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background-color: rgb(var(--button-bg-rgb));
+        flex: 0 0 auto;
+    }
+}

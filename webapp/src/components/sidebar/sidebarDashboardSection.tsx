@@ -19,6 +19,10 @@ import TableIcon from '../../widgets/icons/table'
 import GalleryIcon from '../../widgets/icons/gallery'
 import CalendarIcon from '../../widgets/icons/calendar'
 import GanttIcon from '../../widgets/icons/gantt'
+import ResourceIcon from '../../widgets/icons/resource'
+import HierarchyIcon from '../../widgets/icons/hierarchy'
+import CFDIcon from '../../widgets/icons/cfd'
+import SchedulerIcon from '../../widgets/icons/scheduler'
 
 // Reuse existing sidebar-item styles so the entry looks like a regular board.
 import './sidebarBoardItem.scss'
@@ -31,6 +35,10 @@ const iconForViewType = (viewType: IViewType): JSX.Element => {
     case 'gallery': return <GalleryIcon/>
     case 'calendar': return <CalendarIcon/>
     case 'gantt': return <GanttIcon/>
+    case 'resource': return <ResourceIcon/>
+    case 'hierarchy': return <HierarchyIcon/>
+    case 'cfd': return <CFDIcon/>
+    case 'scheduler': return <SchedulerIcon/>
     default: return <div/>
     }
 }

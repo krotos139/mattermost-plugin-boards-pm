@@ -34,12 +34,28 @@ export default class DateProperty extends DatePropertyType {
             } else {
                 try {
                     const dateValue = JSON.parse(propertyValue as string)
+                    // When `includeTime` is set, dateValue.{from,to} are stored
+                    // as the actual UTC instants (no offset shift), so reading
+                    // them back through `new Date(...)` gives the correct local
+                    // wall-clock time. For the legacy date-only path the
+                    // values are pre-shifted by tz offset and Utils.displayDate
+                    // already prints just the date — no time gets injected.
+                    const fmtTime = (ms: number) => {
+                        const d = new Date(ms)
+                        return d.toLocaleTimeString(intl.locale, {hour: '2-digit', minute: '2-digit'})
+                    }
                     if (dateValue.from) {
                         displayValue = Utils.displayDate(new Date(dateValue.from), intl)
+                        if (dateValue.includeTime) {
+                            displayValue += ' ' + fmtTime(dateValue.from)
+                        }
                     }
                     if (dateValue.to) {
                         displayValue += ' -> '
                         displayValue += Utils.displayDate(new Date(dateValue.to), intl)
+                        if (dateValue.includeTime) {
+                            displayValue += ' ' + fmtTime(dateValue.to)
+                        }
                     }
                 } catch {
                     // do nothing

@@ -1,0 +1,247 @@
+// Copyright (c) 2020-present Mattermost, Inc. All Rights Reserved.
+// See LICENSE.txt for license information.
+
+// Top-level Calendar/Year mode switcher. Sits above the schedule-x
+// chrome (or the YearView grid) so the user always sees what mode
+// they're in regardless of which sub-component is mounted.
+.SchedulerModeSwitcher {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px 8px 12px;
+    flex: 0 0 auto;
+
+    &__btn {
+        background: transparent;
+        border: 1px solid rgba(var(--center-channel-color-rgb), 0.15);
+        border-radius: 4px;
+        padding: 4px 12px;
+        font: inherit;
+        font-size: 13px;
+        color: inherit;
+        cursor: pointer;
+
+        &:hover {
+            background-color: rgba(var(--button-bg-rgb), 0.08);
+        }
+
+        &.active {
+            background-color: rgb(var(--button-bg-rgb));
+            color: rgb(var(--button-color-rgb));
+            border-color: rgb(var(--button-bg-rgb));
+        }
+    }
+}
+
+.SchedulerContainer {
+    // Mirrors HierarchyContainer / GanttContainer / CFDContainer:
+    // `flex: 1` (basis 0) is what makes the column actually fill the
+    // BoardComponent's vertical space. Without it the inner calendar
+    // collapses to its content height (week-only) and never scrolls.
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+
+    // The outer SchedulerContainer also matches the `BoardComponent >
+    // div:nth-child(2)` selector in centerPanel.scss, which applies
+    // `margin-left: 32px` on desktop (and `padding-left: 20px;
+    // margin-left: 0` on mobile ≤768px). That rule sets only the *left*
+    // gutter, so without a counterpart on the right the calendar drifts
+    // 32px (or 20px) to the left of center. We can't override the
+    // parent's padding/margin-left from here — its selector beats
+    // `.SchedulerContainer` on specificity — but `margin-right` is
+    // free real estate (parent rule never sets it), so writing it here
+    // mirrors the visible left gap without fighting the cascade.
+    margin-right: 32px;
+    margin-bottom: 32px;
+    @media (max-width: 768px) {
+        margin-right: 20px;
+        margin-bottom: 20px;
+    }
+
+    // Schedule-X assumes its wrapper grows; mirror that here.
+    .sx-react-calendar-wrapper {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+
+    // Inner body wrapper that hosts the schedule-x React component. Has
+    // its own flex column so the calendar fills the height left over
+    // after the mode switcher, but no horizontal padding — the outer
+    // container already supplies the gutter.
+    &__body {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    // ----- CSS reset against Mattermost styles -----
+    // Mattermost ships several global rules that bleed into Schedule-X's
+    // markup and break its layout:
+    //   * `body { font-size: 14px }` cascades into the chevron buttons,
+    //     overriding Schedule-X's `font-size: 0` trick that's supposed
+    //     to hide the "Previous"/"Next" aria text. Result: those words
+    //     show up rotated (the chevron itself is rotated 225deg/45deg
+    //     and the visible text inherits the same transform).
+    //   * Mattermost's button/input resets add background, padding, and
+    //     border-radius mismatches to header buttons.
+    //   * `*, ::before, ::after { box-sizing: border-box }` is fine, but
+    //     other body-level resets touching `line-height` shift the
+    //     time-axis labels off-pixel and make the time-grid rows look
+    //     misaligned with the hour boundaries.
+    //
+    // Forcing the relevant subtree back to Schedule-X-friendly defaults
+    // is much cheaper (and far less brittle) than disabling Mattermost
+    // styles globally.
+
+    // Hide the chevron's aria-only text. font-size: 0 is what Schedule-X
+    // ships with; we add color: transparent as a belt-and-suspenders so
+    // the workaround survives even if some future Mattermost rule
+    // overrides font-size again.
+    .sx__chevron-wrapper {
+        font-size: 0;
+    }
+    .sx__chevron-wrapper .sx__chevron {
+        color: transparent;
+    }
+
+    // The header bar (Today / nav arrows / range / View / Date) gets
+    // sized inconsistently because Mattermost's button rules force their
+    // own min-height. Re-baseline so the row doesn't visually break.
+    .sx__calendar-header {
+        line-height: 1.4;
+        gap: 8px;
+
+        button {
+            font-family: inherit;
+            font-size: 14px;
+            line-height: 1.4;
+            box-shadow: none;
+        }
+    }
+
+    // Time axis hours and date headers — Mattermost's typographic resets
+    // can drift these by a pixel or two and the grid rows then look
+    // misaligned with the time labels. Pin the line-height so each row
+    // matches the cell height Schedule-X computes from `gridHeight`.
+    .sx__week-grid__hour,
+    .sx__time-grid-day,
+    .sx__week-grid__date,
+    .sx__date-grid-day,
+    .sx__week-header {
+        line-height: 1;
+        font-family: inherit;
+    }
+
+    // Week date strip: numbers shouldn't wrap, day-of-week labels are
+    // smaller & lighter than the day number — schedule-x ships these
+    // styles, but Mattermost's body rules can push the row taller.
+    .sx__week-grid__date-axis,
+    .sx__week-grid__date {
+        min-width: 0;
+    }
+
+    // Schedule-X's reset for inputs uses default browser styling, but
+    // some Mattermost rules add a subtle box-shadow to <select> elements
+    // which makes the View / Date dropdowns look sunken next to the rest
+    // of the header. Strip the shadow inside the calendar only.
+    select.sx__view-selection,
+    .sx__date-input-wrapper input {
+        box-shadow: none !important;
+    }
+
+    // Mobile / responsive month-agenda layout. Schedule-X auto-switches
+    // to MonthAgenda for narrow widths; its day cell has a fixed 3rem
+    // height and the dots-row sits flush against the bottom border that
+    // separates this week from the next. Visually that reads as the dots
+    // belonging to the *following* week. Loosen the cell so dots have
+    // breathing room above the inter-week separator. Also pull the day
+    // number tighter against the top of the cell so number+dots cluster
+    // together rather than the dots drifting toward the line.
+    .sx__month-agenda-day {
+        height: auto;
+        min-height: 3.5rem;
+        padding-top: 6px;
+        padding-bottom: 12px;
+        justify-content: flex-start;
+    }
+    .sx__month-agenda-day__event-icons {
+        margin-top: 3px;
+    }
+}
+
+// Per-event content rendered inside Schedule-X's event slot. Schedule-X
+// drops its own background/border styles when a customComponent is
+// configured (so the renderer can paint its own colors); we apply
+// background, border, and onContainer color via inline style from the
+// event's calendars[id] entry. The CSS below is just structural.
+.SchedulerEvent {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px 6px;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    line-height: 1.25;
+    border-radius: inherit;
+    box-sizing: border-box;
+
+    &__titleRow {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    &__icon {
+        flex: 0 0 auto;
+        font-size: 12px;
+    }
+
+    &__title {
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        flex: 0 1 auto;
+    }
+
+    // Visible card properties rendered inline next to the title (e.g.
+    // "Card title · Done · High"). Each part keeps its own ellipsis so the
+    // bar truncates gracefully when the event is narrow rather than
+    // pushing later parts off-screen invisibly. Slightly dimmer than the
+    // title so the focal element stays clear.
+    &__inlineProp {
+        flex: 0 1 auto;
+        margin-left: 6px;
+        font-size: 11px;
+        font-weight: 400;
+        opacity: 0.8;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        max-width: 200px;
+    }
+}
+
+.SchedulerContainer__empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    color: rgba(var(--center-channel-color-rgb), 0.6);
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.4;
+}

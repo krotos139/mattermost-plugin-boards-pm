@@ -58,6 +58,7 @@ import GanttView from './gantt/ganttView'
 import HierarchyView from './hierarchy/hierarchyView'
 import ResourceView from './resource/resourceView'
 import CFDView from './cfd/cfdView'
+import SchedulerView from './scheduler/schedulerView'
 
 import CardLimitNotification from './cardLimitNotification'
 
@@ -543,6 +544,16 @@ const CenterPanel = (props: Props) => {
                     board={props.board}
                     activeView={props.activeView}
                     readonly={props.readonly}
+                />}
+
+            {activeView.fields.viewType === 'scheduler' &&
+                <SchedulerView
+                    board={props.board}
+                    cards={props.cards}
+                    activeView={props.activeView}
+                    readonly={props.readonly}
+                    dateDisplayProperty={props.dateDisplayProperty}
+                    showCard={showCard}
                 />}
 
             {activeView.fields.viewType === 'gallery' &&

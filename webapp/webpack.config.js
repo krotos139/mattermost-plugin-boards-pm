@@ -63,6 +63,14 @@ const config = {
         ],
         alias: {
             moment: path.resolve(__dirname, './node_modules/moment/'),
+            // React 17 ships jsx-runtime.js but has no `exports` field, so
+            // ESM imports of `react/jsx-runtime` (used by Schedule-X v3.7's
+            // compiled bundle) hit webpack's strict "fully specified" mode
+            // and fail to resolve without the explicit .js. Externals still
+            // catch the bare `react` import inside the resolved file, so
+            // there's no double-bundling of React.
+            'react/jsx-runtime': path.resolve(__dirname, './node_modules/react/jsx-runtime.js'),
+            'react/jsx-dev-runtime': path.resolve(__dirname, './node_modules/react/jsx-dev-runtime.js'),
         },
         extensions: ['*', '.js', '.jsx', '.ts', '.tsx'],
     },

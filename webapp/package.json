@@ -67,7 +67,13 @@
 		"react-redux": "7.2.4",
 		"react-router-dom": "5.3.4",
 		"react-select": "^5.2.2",
-		"reactflow": "^11.11.4"
+		"reactflow": "^11.11.4",
+		"@schedule-x/calendar": "~3.7.0",
+		"@schedule-x/drag-and-drop": "~3.7.0",
+		"@schedule-x/events-service": "~3.7.0",
+		"@schedule-x/react": "~3.7.0",
+		"@schedule-x/resize": "~3.7.0",
+		"@schedule-x/theme-default": "~3.7.0"
 	},
 	"jest": {
 		"moduleNameMapper": {

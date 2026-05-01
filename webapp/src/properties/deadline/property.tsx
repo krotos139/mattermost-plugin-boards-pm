@@ -34,12 +34,25 @@ export default class DeadlineProperty extends DatePropertyType {
             } else {
                 try {
                     const dateValue = JSON.parse(propertyValue as string)
+                    // Mirror DateProperty.displayValue: when `includeTime`
+                    // is set the stored from/to are real UTC instants and
+                    // we surface the wall-clock time alongside the date.
+                    const fmtTime = (ms: number) => {
+                        const d = new Date(ms)
+                        return d.toLocaleTimeString(intl.locale, {hour: '2-digit', minute: '2-digit'})
+                    }
                     if (dateValue.from) {
                         displayValue = Utils.displayDate(new Date(dateValue.from), intl)
+                        if (dateValue.includeTime) {
+                            displayValue += ' ' + fmtTime(dateValue.from)
+                        }
                     }
                     if (dateValue.to) {
                         displayValue += ' -> '
                         displayValue += Utils.displayDate(new Date(dateValue.to), intl)
+                        if (dateValue.includeTime) {
+                            displayValue += ' ' + fmtTime(dateValue.to)
+                        }
                     }
                 } catch {
                     // do nothing

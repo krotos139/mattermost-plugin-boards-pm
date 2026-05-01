@@ -5,7 +5,7 @@
 import {Block, createBlock} from './block'
 import {FilterGroup, createFilterGroup} from './filterGroup'
 
-type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource' | 'hierarchy' | 'cfd'
+type IViewType = 'board' | 'table' | 'gallery' | 'calendar' | 'gantt' | 'resource' | 'hierarchy' | 'cfd' | 'scheduler'
 
 // Hierarchy view: layout direction passed to dagre. Top-bottom mirrors the
 // PERT examples in the design doc; LR is handy for very deep trees that
