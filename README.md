@@ -32,6 +32,8 @@ Requires Mattermost 10.7.0+. The deadline ticker, `/boards` slash command and da
 
 **Timeline (Gantt)** — Cards as draggable bars. Pick **Display by** (date prop), **Linked by** (task / multiTask for parent→child arrows), **Progress by** (number 0–100 to fill bar), **Color by** (select option color). Drag bars to reschedule; descendants in the dependency tree shift by the same delta.
 
+![Timeline view overview](docs/images/timeline-view-overview.png)
+
 **Resource** — Same Gantt layout pivoted by assignee. Each value of **Resources by** (person / multiPerson / select / multiSelect) gets a swim lane; overlapping bars on the same lane are flagged as conflicts. Drag a bar to a different lane to reassign; collapse a lane to a single aggregate bar.
 
 **Hierarchy** — Cards as boxes connected by parent→child edges (defined by a Task / Multi task property). Auto-laid out via dagre; pick rank direction (TB/LR/BT/RL) and an optional Color by.
@@ -60,6 +62,8 @@ Requires Mattermost 10.7.0+. The deadline ticker, `/boards` slash command and da
 
 **Subtasks block** — Content-block type with a checklist where each row cycles through todo / in-progress / done; the header shows running counts.
 
+![Subtasks content block](docs/images/subtasks-block.png)
+
 **History tab** — Card detail has Comments + History tabs. History lists every property change, title rename, comment add/edit/delete and content-block edit with user, timestamp and before→after. Consecutive same-user same-property edits within 30 minutes coalesce into one entry.
 
 **Attachments + media** — Cards have an Attachments column (download per row) plus inline image / video content blocks. Drag-drop or paste files: `image/*` → image block, `video/*` → video block, anything else → attachment list. Deleting an attachment also frees the underlying file when no other block references it.
@@ -70,6 +74,8 @@ Requires Mattermost 10.7.0+. The deadline ticker, `/boards` slash command and da
 
 **My Deadlines** — Sidebar pin showing every card across all visible boards that has a `Deadline` property AND lists the current user in some `Person (notify)` / `Multi person (notify)` property. Sorted by deadline ascending. Cards using regular `Date` and `Person` won't appear — the dashboard is a deliberate opt-in.
 
+![My Deadlines dashboard](docs/images/my-deadlines-board.png)
+
 **All Tasks** — Every card the user can see across every board they're a member of, sorted by last update. Capped at 5000 cards.
 
 ---
@@ -77,6 +83,8 @@ Requires Mattermost 10.7.0+. The deadline ticker, `/boards` slash command and da
 ## Mobile
 
 **`/boards` slash command** — Type `/boards` in any channel; an ephemeral one-shot link opens Boards in the browser already authenticated (60-second TTL). Append a path (`/boards /boards/team/<teamID>/<boardID>`) to deep-link.
+
+![/boards slash command on mobile, opening Boards in the browser already authenticated](docs/images/boards-slash-command.png)
 
 **Touch UX** — DnD requires a 250ms long-press with a 20px scroll-tolerance, so vertical scroll on phones no longer reorders cards. Sidebar auto-collapses after navigation on screens narrower than 768px.
 
