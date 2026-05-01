@@ -195,9 +195,27 @@
         }
 
         .menu-options {
-            align-items: center;
+            // `stretch` instead of the historical `center`: Menu wraps
+            // every child in an unsized `<div onMouseEnter>` (see
+            // widgets/menu/menu.tsx React.Children.map). With
+            // `align-items: center` those wrappers shrink to content
+            // width and each .menu-option below — even with `width:
+            // 100%` — only fills its own wrapper, ending up as a row
+            // of disconnected centered pills with visible gutters.
+            // `stretch` makes each wrapper fill the rounded
+            // .menu-options panel so the whole list reads as one
+            // continuous card.
+            align-items: stretch;
             border-radius: 10px;
             overflow: hidden;
+
+            // Solid white panel on mobile so children that don't paint
+            // their own background (MenuSeparator, hover-state overlays
+            // that use a translucent blue tint) don't leak through to
+            // the .Menu overlay's 50% gray tint behind. Without this,
+            // every separator and every hovered item read as a gap in
+            // the otherwise solid card.
+            background-color: rgb(var(--center-channel-bg-rgb));
 
             flex: 0 0 auto;
 

@@ -8,6 +8,18 @@
         min-height: 28px;
     }
 
+    // ViewTitle padding is set with higher specificity by
+    // `.BoardComponent > .top-head .ViewTitle` in centerPanel.scss, so
+    // mobile padding-left has to live there too. We just set min-width:
+    // 0 on inner divs here for narrow viewports — the existing 300px
+    // floor would cause horizontal overflow once the parent reserves
+    // room for the sidebar-show button.
+    @media (max-width: 768px) {
+        > div {
+            min-width: 0;
+        }
+    }
+
     .description {
         max-height: 80px;
         overflow: auto;

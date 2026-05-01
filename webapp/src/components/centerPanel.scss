@@ -64,6 +64,16 @@
             justify-content: center;
             display: flex;
             flex-direction: column;
+
+            // On mobile the sidebar collapses into a 50×50 absolute-
+            // positioned hamburger button at the top-left of the
+            // viewport (`.Sidebar.hidden` in sidebar.scss). Without
+            // reserving room here the button sits on top of the board
+            // emoji and the first letters of the title. 52px = the
+            // 50px button + 2px breathing space.
+            @media (max-width: 768px) {
+                padding-left: 52px;
+            }
         }
     }
 

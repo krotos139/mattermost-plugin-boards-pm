@@ -21,4 +21,34 @@
             overflow-y: scroll;
         }
     }
+
+    // Mobile: the inner <Menu> switches to a fullscreen `position: fixed`
+    // overlay (see `.Menu.noselect @media (max-width: 430px)` in
+    // widgets/menu/menu.scss). Several of the desktop ViewMenu tweaks
+    // above fight that layout:
+    //   * `margin-top: -200px` was meant to lift the desktop dropdown
+    //     above the trigger button. On mobile the wrapper sits at the
+    //     trigger position with the actual list rendering full-screen,
+    //     and the upward shift can move clickable areas off-screen and
+    //     leave a tall ghost gap above the menu.
+    //   * `.subMenu { height: 100% }` on a fullscreen SubMenu collapses
+    //     onto the SubMenu's own height, which combined with the
+    //     `max-height: 370px` rule clamps the "Add view" submenu to a
+    //     50px scrollable strip — half the visible items get hidden.
+    //   * `.view-list { max-height: 30vh }` over-constrains the list
+    //     when the screen is already 100vh tall and content can scroll.
+    // Reset all four on the mobile breakpoint so the fullscreen overlay
+    // can use the full available height naturally.
+    @media (max-width: 430px) {
+        margin-top: 0;
+
+        .view-list {
+            max-height: none;
+        }
+
+        .subMenu {
+            height: auto;
+            overflow: visible;
+        }
+    }
 }
