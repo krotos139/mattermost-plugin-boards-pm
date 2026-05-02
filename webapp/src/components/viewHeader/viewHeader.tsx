@@ -53,6 +53,7 @@ import ViewHeaderSortMenu from './viewHeaderSortMenu'
 import ViewHeaderActionsMenu from './viewHeaderActionsMenu'
 import ViewHeaderSearch from './viewHeaderSearch'
 import FilterComponent from './filterComponent'
+import ViewHeaderAllTasksFilter from './viewHeaderAllTasksFilter'
 
 import './viewHeader.scss'
 
@@ -80,7 +81,9 @@ const ViewHeader = (props: Props) => {
 
     // System dashboards (e.g. My Deadlines) aggregate virtual cards from other
     // boards — creating new cards here makes no sense.
-    const isDashboard = Boolean((board.properties as Record<string, unknown> | undefined)?.dashboardKind)
+    const dashboardKind = (board.properties as Record<string, unknown> | undefined)?.dashboardKind as string | undefined
+    const isDashboard = Boolean(dashboardKind)
+    const isAllTasksDashboard = dashboardKind === 'allTasks'
 
     const withGroupBy = activeView.fields.viewType === 'board' || activeView.fields.viewType === 'table'
     const withDisplayBy = activeView.fields.viewType === 'calendar' || activeView.fields.viewType === 'gantt' || activeView.fields.viewType === 'resource' || activeView.fields.viewType === 'scheduler'
@@ -216,6 +219,17 @@ const ViewHeader = (props: Props) => {
 
             {!props.readonly && canEditBoardProperties &&
             <>
+                {/* All Tasks dashboard's per-user assignee filter — sits
+                    here, alongside Properties / Group by / Filter, because
+                    it's the primary input controlling what cards appear in
+                    the table. Default is the current user. */}
+                {isAllTasksDashboard && (
+                    <ViewHeaderAllTasksFilter
+                        board={board}
+                        cardCount={cards.length}
+                    />
+                )}
+
                 {/* Card properties — hidden on CFD because the chart's
                     bands are driven by the cfdPropertyId, not by the
                     visible-property list, and exposing the Properties

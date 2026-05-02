@@ -53,8 +53,14 @@ const (
 
 	// Hard cap on the number of cards an "All Tasks" dashboard returns.
 	// Keeps the response size bounded; cards are sorted by UpdateAt DESC so
-	// the most recent ones survive the cut.
-	allTasksMaxCards = 5000
+	// the most recent ones survive the cut. The frontend uses the same
+	// constant to detect truncation (cards.length >= cap → show warning).
+	allTasksMaxCards = 1000
+
+	// Board.Properties key for the per-user "All Tasks" assignee filter.
+	// Stores a JSON array of user IDs. Empty/absent means "no users selected"
+	// — which is the default and yields an empty result set on purpose.
+	BoardPropertyAllTasksFilterUserIDs = "dashboardAllTasksFilterUserIDs"
 )
 
 // dashboardCardProperties returns the fixed set of synthetic properties for
@@ -290,9 +296,25 @@ func (a *App) getDeadlinesCards(board *model.Board, userID string) ([]*model.Blo
 }
 
 // getAllTasksCards returns up to allTasksMaxCards virtual blocks aggregating
-// every non-template, non-deleted card on every board the user is allowed to
-// see. Cards are sorted by source UpdateAt DESC and trimmed to the cap.
+// non-template, non-deleted cards from every board the user is allowed to
+// see whose person-typed properties (Person, Multi person, Person (notify),
+// Multi person (notify)) include any of the user IDs configured in the
+// dashboard board's `dashboardAllTasksFilterUserIDs` property. The filter
+// default — when the property has never been set — is the calling user;
+// an explicit empty array yields an empty result set on purpose, since
+// full-team aggregation over a busy server is too expensive to run as
+// the implicit default.
 func (a *App) getAllTasksCards(board *model.Board, userID string) ([]*model.Block, error) {
+	filterUserIDs, hasExplicitFilter := readAllTasksFilter(board)
+	if !hasExplicitFilter {
+		// No filter persisted yet — default to the calling user so a
+		// freshly-opened dashboard already shows something useful.
+		filterUserIDs = []string{userID}
+	}
+	if len(filterUserIDs) == 0 {
+		return []*model.Block{}, nil
+	}
+
 	sourceBoards, err := a.store.GetBoardsForUserAndTeam(userID, board.TeamID, false)
 	if err != nil {
 		return nil, fmt.Errorf("cannot list source boards: %w", err)
@@ -305,6 +327,11 @@ func (a *App) getAllTasksCards(board *model.Board, userID string) ([]*model.Bloc
 			continue
 		}
 		idx := indexSourceBoard(src.CardProperties)
+		// No assignee-typed properties on this board means it can never
+		// match the filter — skip it before the (expensive) blocks load.
+		if len(idx.assigneePropIDs) == 0 {
+			continue
+		}
 
 		blocks, err := a.store.GetBlocksForBoard(src.ID)
 		if err != nil {
@@ -324,6 +351,10 @@ func (a *App) getAllTasksCards(board *model.Board, userID string) ([]*model.Bloc
 				continue
 			}
 			cardProps, _ := fields["properties"].(map[string]interface{})
+
+			if !cardMatchesAssigneeFilter(cardProps, idx.assigneePropIDs, filterUserIDs) {
+				continue
+			}
 
 			statusText := ""
 			if idx.statusPropID != "" && cardProps != nil {
@@ -370,6 +401,79 @@ func (a *App) getAllTasksCards(board *model.Board, userID string) ([]*model.Bloc
 		out = out[:allTasksMaxCards]
 	}
 	return out, nil
+}
+
+// readAllTasksFilter extracts the configured assignee user-ID filter from a
+// dashboard board's properties. The second return value distinguishes the
+// "never explicitly set" case (so callers can apply a default) from the
+// "explicit empty array" case (which means the user really did clear the
+// filter and wants no cards). Tolerates the JSON array landing as either
+// `[]interface{}` (the default `encoding/json` decoding) or `[]string`.
+func readAllTasksFilter(board *model.Board) (ids []string, hasExplicit bool) {
+	if board == nil || board.Properties == nil {
+		return nil, false
+	}
+	raw, ok := board.Properties[BoardPropertyAllTasksFilterUserIDs]
+	if !ok {
+		return nil, false
+	}
+	switch v := raw.(type) {
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// cardMatchesAssigneeFilter reports whether any of the card's assignee
+// properties contains any of the filter user IDs. Returns false on a card
+// with no person-typed property values, which is the desired behaviour:
+// "All Tasks" is an opt-in roster, so cards with no assignee shouldn't
+// surface in anyone's filtered view.
+func cardMatchesAssigneeFilter(cardProps map[string]interface{}, propIDs []string, filterUserIDs []string) bool {
+	if cardProps == nil || len(propIDs) == 0 || len(filterUserIDs) == 0 {
+		return false
+	}
+	wanted := make(map[string]struct{}, len(filterUserIDs))
+	for _, id := range filterUserIDs {
+		wanted[id] = struct{}{}
+	}
+	for _, propID := range propIDs {
+		switch v := cardProps[propID].(type) {
+		case string:
+			if _, ok := wanted[v]; ok {
+				return true
+			}
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					if _, ok := wanted[s]; ok {
+						return true
+					}
+				}
+			}
+		case []string:
+			for _, s := range v {
+				if _, ok := wanted[s]; ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // CollectDashboardAssigneeUserIDs returns the union of user IDs that appear

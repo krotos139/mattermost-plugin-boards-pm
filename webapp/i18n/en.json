@@ -1,6 +1,12 @@
 {
   "AdminBadge.SystemAdmin": "Admin",
   "AdminBadge.TeamAdmin": "Team Admin",
+  "AllTasks.filter-empty-warning": "No tasks shown — pick a user to filter by.",
+  "AllTasks.filter-label": "Show tasks assigned to",
+  "AllTasks.filter-none": "No assignee",
+  "AllTasks.filter-one": "Assigned: {user}",
+  "AllTasks.filter-placeholder": "Pick a user…",
+  "AllTasks.filter-truncated": "Showing the first {cap, number} matches. Narrow the filter to see fewer, more relevant tasks.",
   "AppBar.Tooltip": "Toggle Linked Boards",
   "Attachment.Attachment-title": "Attachment",
   "AttachmentBlock.DeleteAction": "delete",

@@ -1,0 +1,52 @@
+.AllTasksFilter {
+    min-width: 360px;
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px;
+
+    &__title {
+        font-size: 12px;
+        font-weight: 600;
+        color: rgba(var(--center-channel-color-rgb), 0.72);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    &__picker {
+        // Same chrome as the in-card MultiPerson editor so the picker
+        // doesn't read as a bare react-select on a flat panel.
+        background: rgb(var(--center-channel-bg-rgb));
+        border: 1px solid rgba(var(--center-channel-color-rgb), 0.16);
+        border-radius: var(--default-rad);
+        padding: 4px 6px;
+        min-height: 32px;
+    }
+
+    &__hint {
+        font-size: 12px;
+        color: rgba(var(--center-channel-color-rgb), 0.6);
+    }
+
+    &__warning {
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 10px;
+        border-radius: var(--default-rad);
+        background: rgba(255, 188, 66, 0.18);
+        color: rgb(var(--center-channel-color-rgb));
+        border-left: 3px solid #ffbc1f;
+    }
+}
+
+.AllTasksFilter__cap-badge {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: #ffbc1f;
+    color: #000;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 16px;
+}
