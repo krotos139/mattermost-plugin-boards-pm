@@ -132,11 +132,34 @@ func toolJSON(v interface{}) (toolsCallResult, error) {
 func rawSchema(s string) json.RawMessage {
 	var v interface{}
 	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		panic(errors.New("mcp: invalid embedded schema: " + err.Error()))
+		panic(fmt.Errorf("%w: %w", errInvalidEmbeddedSchema, err))
 	}
 	out, _ := json.Marshal(v)
 	return out
 }
+
+// Sentinel errors for tools.go. err113 demands wrapped static errors for
+// machine-checkable error types; the surrounding human-readable detail is
+// added via fmt.Errorf("%w: ...", sentinel, detail).
+var (
+	errInvalidEmbeddedSchema   = errors.New("mcp: invalid embedded schema")
+	errUserNotFound            = errors.New("user not found")
+	errGetTeamsForUser         = errors.New("get teams for user")
+	errInvalidBoardType        = errors.New("type not in {private, open}")
+	errInvalidMinimumRole      = errors.New("minimum_role not in {viewer, commenter, editor, admin}")
+	errInvalidCursorNegative   = errors.New("invalid cursor: negative offset")
+	errUnknownDateRange        = errors.New("unknown range (try overdue / today / this_week / next_week / YYYY-MM-DD..YYYY-MM-DD)")
+	errBoardNoPersonProperty   = errors.New("board has no Person property — use properties{} explicitly")
+	errBoardNoStatusProperty   = errors.New("board has no Status select property")
+	errStatusNotInOptions      = errors.New("status not in board options")
+	errBoardNoPriorityProperty = errors.New("board has no Priority select property")
+	errPriorityNotInOptions    = errors.New("priority not in board options")
+	errBoardNoDeadlineProperty = errors.New("board has no Deadline / Date property to hold due_date")
+	errFilenameEmpty           = errors.New("filename is empty")
+	errFilenameDots            = errors.New("filename must not be '.' or '..' — pass a real filename")
+	errFilenameSeparators      = errors.New("filename must not contain path separators ('/' or '\\\\') — pass only the basename")
+	errFilenamePathTraversal   = errors.New("filename must not contain '..' (path-traversal marker)")
+)
 
 // =====================================================================
 // Property-type classification
@@ -150,17 +173,17 @@ func rawSchema(s string) json.RawMessage {
 // tool implementations accept any matching property as the source.
 
 const (
-	propTypeText             = "text"
-	propTypeSelect           = "select"
-	propTypeMultiSelect      = "multiSelect"
-	propTypeNumber           = "number"
-	propTypeDate             = "date"
-	propTypeDeadline         = "deadline"
-	propTypeCreatedTime      = "createdTime"
-	propTypeUpdatedTime      = "updatedTime"
-	propTypePerson           = "person"
-	propTypeMultiPerson      = "multiPerson"
-	propTypePersonNotify     = "personNotify"
+	propTypeText              = "text"
+	propTypeSelect            = "select"
+	propTypeMultiSelect       = "multiSelect"
+	propTypeNumber            = "number"
+	propTypeDate              = "date"
+	propTypeDeadline          = "deadline"
+	propTypeCreatedTime       = "createdTime"
+	propTypeUpdatedTime       = "updatedTime"
+	propTypePerson            = "person"
+	propTypeMultiPerson       = "multiPerson"
+	propTypePersonNotify      = "personNotify"
 	propTypeMultiPersonNotify = "multiPersonNotify"
 )
 
@@ -601,7 +624,7 @@ func (s *Server) resolveAssigneeID(callerID, raw string) (string, error) {
 	}
 	user, appErr := s.api.GetUserByUsername(strings.TrimPrefix(v, "@"))
 	if appErr != nil || user == nil {
-		return "", fmt.Errorf("user not found: %s", raw)
+		return "", fmt.Errorf("%w: %s", errUserNotFound, raw)
 	}
 	return user.Id, nil
 }
@@ -622,7 +645,7 @@ type currentUserInfo struct {
 func (s *Server) toolGetCurrentUser() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "get_current_user",
+			Name:        "get_current_user",
 			Description: "Returns identity info for the user this MCP session is running as: user_id, username, email, plus first_name / last_name / nickname when those are populated in Mattermost (omitted when empty). Use this when you need to know who \"me\" is — to display the user's name, to address them, or when another tool requires a username. You do NOT need this for assigning cards: every tool that takes assigned_to / assignee accepts the literal string \"me\", which is resolved server-side to the calling user's id.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -679,7 +702,7 @@ func summarizeBoard(b *model.Board) boardSummary {
 func (s *Server) toolListMyBoards() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "list_my_boards",
+			Name:        "list_my_boards",
 			Description: "Returns all Focalboard boards the current user has access to. Use this when the user asks about their boards / projects / tasks but doesn't specify a particular board. Each entry has id, title, description, type (\"team\" / \"personal\" / \"open\"), and last-modified timestamp. Template boards are hidden by default — pass include_templates=true to include them too.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -720,7 +743,7 @@ func (s *Server) toolListMyBoards() toolEntry {
 func (s *Server) boardsForUser(userID string) ([]*model.Board, error) {
 	teams, appErr := s.api.GetTeamsForUser(userID)
 	if appErr != nil {
-		return nil, fmt.Errorf("get teams for user: %s", appErr.Message)
+		return nil, fmt.Errorf("%w: %s", errGetTeamsForUser, appErr.Message)
 	}
 	seen := make(map[string]struct{})
 	var out []*model.Board
@@ -745,10 +768,10 @@ func (s *Server) boardsForUser(userID string) ([]*model.Board, error) {
 // =====================================================================
 
 type boardPropertySchema struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Type        string                  `json:"type"`
-	Options     []boardPropertyOption   `json:"options,omitempty"`
+	ID      string                `json:"id"`
+	Name    string                `json:"name"`
+	Type    string                `json:"type"`
+	Options []boardPropertyOption `json:"options,omitempty"`
 }
 
 type boardPropertyOption struct {
@@ -782,7 +805,7 @@ type boardMemberSummary struct {
 func (s *Server) toolGetBoardInfo() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "get_board_info",
+			Name:        "get_board_info",
 			Description: "Returns metadata and schema for a specific board: title, description, status / priority option values, all custom property templates, the resolved due-date / assignee property names, and the list of board members (user_id + username + role). Call this BEFORE creating or modifying cards on an unfamiliar board so you know what option labels are valid. Distinguishes \"not found\" (404) from \"permission denied\" (403) in error messages so the agent doesn't ask the user for access to a board that doesn't exist.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -860,7 +883,7 @@ func (s *Server) toolGetBoardInfo() toolEntry {
 
 // boardTypeLabel maps Boards' single-character board-type code to the
 // human-readable noun the spec exposes ("personal" / "team" / "open"). Falls
-// back to the raw code for unrecognised values so future additions still
+// back to the raw code for unrecognized values so future additions still
 // surface to the agent.
 func boardTypeLabel(t string) string {
 	switch t {
@@ -919,7 +942,7 @@ func resolveBoardType(raw string) (model.BoardType, error) {
 	case "o", "open", "public":
 		return model.BoardTypeOpen, nil
 	}
-	return "", fmt.Errorf("type %q not in {private, open}", raw)
+	return "", fmt.Errorf("%w: got %q", errInvalidBoardType, raw)
 }
 
 // resolveBoardRole maps the agent-supplied minimum_role to the matching
@@ -938,13 +961,13 @@ func resolveBoardRole(raw string) (model.BoardRole, error) {
 	case "admin":
 		return model.BoardRoleAdmin, nil
 	}
-	return "", fmt.Errorf("minimum_role %q not in {viewer, commenter, editor, admin}", raw)
+	return "", fmt.Errorf("%w: got %q", errInvalidMinimumRole, raw)
 }
 
 func (s *Server) toolCreateBoard() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "create_board",
+			Name:        "create_board",
 			Description: "Creates a new Focalboard board on a team. team_id and title are required. type defaults to \"private\" (visible only to members the calling user invites later); pass \"open\" to make the board visible to anyone on the team — the calling user must have the matching create-channel permission on the team. The calling user is added as the board admin automatically. Returns the new board in the same shape list_my_boards() rows use, plus a deep-link URL when SiteURL is configured.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -1117,7 +1140,7 @@ func decodeCursor(s string) (int, error) {
 		return 0, fmt.Errorf("invalid cursor: %w", err)
 	}
 	if c.Offset < 0 {
-		return 0, errors.New("invalid cursor: negative offset")
+		return 0, errInvalidCursorNegative
 	}
 	return c.Offset, nil
 }
@@ -1182,7 +1205,7 @@ type dateRange struct {
 //
 // Status / Priority / DueDate are pointers so unset values render as JSON
 // `null` rather than `""` — that lets agents distinguish "field unset" from
-// "field cleared to empty string". Assignees is always serialised (`[]` when
+// "field cleared to empty string". Assignees is always serialized (`[]` when
 // empty, never `null`) so result rows have a uniform shape.
 //
 // Properties is the resolved map keyed by property name (so the agent doesn't
@@ -1216,11 +1239,15 @@ type cardSummary struct {
 	PropertiesRaw     map[string]interface{} `json:"properties_raw,omitempty"`
 }
 
+// dispatches every optional search facet; splitting it would just push the
+// branching into private helpers without making the logic easier to follow.
+//
+//nolint:gocyclo // Combines schema declaration with the inline handler that
 func (s *Server) toolSearchCards() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "search_cards",
-			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default every card on the matched board(s) is returned, including cards with no status / priority / due date / assignee set — those fields come back as JSON null and `assignees` is `[]`. Status and priority match fuzzily: case-insensitive, with leading numeric prefixes (\"1. \") and trailing emoji decoration stripped, so passing \"high\" matches an option labelled \"1. High 🔥\". Properties are returned resolved by name (e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}); pass include_raw_properties=true to also receive the raw id-keyed map. text_query is a case-insensitive substring match against the card title AND every text-bearing content block (description, comments, subtasks, checkboxes) — a hit anywhere is enough. Use the `cursor` returned in the response to paginate large result sets.",
+			Name:        "search_cards",
+			Description: "Primary tool for finding tasks (cards). All parameters are optional and combine. By default every card on the matched board(s) is returned, including cards with no status / priority / due date / assignee set — those fields come back as JSON null and `assignees` is `[]`. Status and priority match fuzzily: case-insensitive, with leading numeric prefixes (\"1. \") and trailing emoji decoration stripped, so passing \"high\" matches an option labeled \"1. High 🔥\". Properties are returned resolved by name (e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}); pass include_raw_properties=true to also receive the raw id-keyed map. text_query is a case-insensitive substring match against the card title AND every text-bearing content block (description, comments, subtasks, checkboxes) — a hit anywhere is enough. Use the `cursor` returned in the response to paginate large result sets.",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"properties": {
@@ -1260,8 +1287,8 @@ func (s *Server) toolSearchCards() toolEntry {
 			// Determine which boards to search.
 			var targetBoards []*model.Board
 			if args.BoardID != "" {
-				b, err := s.backend.GetBoard(args.BoardID)
-				if err != nil || b == nil {
+				b, gerr := s.backend.GetBoard(args.BoardID)
+				if gerr != nil || b == nil {
 					return toolError("not found: board %s", args.BoardID), nil
 				}
 				if !s.backend.HasPermissionToBoard(userID, args.BoardID, model.PermissionViewBoard) {
@@ -1269,9 +1296,9 @@ func (s *Server) toolSearchCards() toolEntry {
 				}
 				targetBoards = []*model.Board{b}
 			} else {
-				bs, err := s.boardsForUser(userID)
-				if err != nil {
-					return toolError("list boards: %v", err), nil
+				bs, lerr := s.boardsForUser(userID)
+				if lerr != nil {
+					return toolError("list boards: %v", lerr), nil
 				}
 				for _, b := range bs {
 					if b.IsTemplate && !args.IncludeTemplates {
@@ -1602,7 +1629,7 @@ func parseDueDateRange(raw string) (int64, int64, error) {
 		}
 		return startOfDay(from).UnixMilli(), endOfDay(to).UnixMilli(), nil
 	}
-	return 0, 0, fmt.Errorf("unknown range %q (try overdue / today / this_week / next_week / YYYY-MM-DD..YYYY-MM-DD)", raw)
+	return 0, 0, fmt.Errorf("%w: got %q", errUnknownDateRange, raw)
 }
 
 // cardSummaryFor projects a backend Card onto the MCP-facing cardSummary,
@@ -1631,6 +1658,11 @@ func (s *Server) cardSummaryFor(card *model.Card, board *model.Board, includeRaw
 	return s.cardSummaryForWithBlocks(card, board, includeRaw, blocks)
 }
 
+// assignees, due date, attachments, comments, subtasks, checkboxes) into one
+// summary struct; the branches are flat by design so consumers see the full
+// shape in one place.
+//
+//nolint:gocyclo // Resolves every well-known card facet (status, priority,
 func (s *Server) cardSummaryForWithBlocks(card *model.Card, board *model.Board, includeRaw bool, blocks []*model.Block) cardSummary {
 	rawProps := card.Properties
 	if rawProps == nil {
@@ -1876,7 +1908,7 @@ type cardComment struct {
 func (s *Server) toolGetCardDetails() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "get_card_details",
+			Name:        "get_card_details",
 			Description: "Returns full information about a card: title, description (markdown), status, priority, due date, assignees, all custom properties (resolved by name to human values, e.g. {\"Status\": \"Done\", \"Assignee\": {\"user_id\": \"...\", \"username\": \"...\"}}), comments (author + timestamp), subtask blocks (id, title, checked), checkbox blocks (id, title, checked), attachments (image / video / generic file metadata — same shape as list_attachments), and content_order. comments / subtasks / checkboxes / attachments / content_order always come back as arrays (possibly empty), never omitted. Use the card_id obtained from search_cards() results. Pass include_raw_properties=true to also receive the raw id-keyed property map under properties_raw.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2028,7 +2060,7 @@ type createCardArgs struct {
 func (s *Server) toolCreateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "create_card",
+			Name:        "create_card",
 			Description: "Creates a new card on a board. Title is required. assigned_to accepts the literal \"me\" (the user calling this tool — never ask them for their id) or a Mattermost username. status / priority / due_date are convenience shortcuts mapped onto the board's actual property templates (Person*, Status select, Priority select, Deadline / Date). status and priority match fuzzily — case-insensitive, with leading numeric prefixes and emojis stripped. Pass `properties` for any custom field you need to set explicitly by id. Returns the created card in the same shape as get_card_details() — title, status, priority, assignees, due_date, resolved properties, card_link — so you don't need a follow-up read.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2066,8 +2098,8 @@ func (s *Server) toolCreateCard() toolEntry {
 			for k, v := range args.Properties {
 				properties[k] = v
 			}
-			if err := s.applyConvenienceProps(board, userID, args.AssignedTo, args.Status, args.Priority, args.DueDate, properties); err != nil {
-				return toolError("%v", err), nil
+			if applyErr := s.applyConvenienceProps(board, userID, args.AssignedTo, args.Status, args.Priority, args.DueDate, properties); applyErr != nil {
+				return toolError("%v", applyErr), nil
 			}
 
 			card := &model.Card{
@@ -2128,7 +2160,7 @@ func (s *Server) applyConvenienceProps(
 		// string id.
 		props := findPersonProperties(board)
 		if len(props) == 0 {
-			return errors.New("board has no Person property — use properties{} explicitly")
+			return errBoardNoPersonProperty
 		}
 		target := props[0]
 		switch target.ptype() {
@@ -2141,29 +2173,29 @@ func (s *Server) applyConvenienceProps(
 	if status != "" {
 		prop := findPropertyByName(board, "status")
 		if prop == nil || prop.ptype() != propTypeSelect {
-			return errors.New("board has no Status select property")
+			return errBoardNoStatusProperty
 		}
 		id := findOptionIDByLabel(prop, status)
 		if id == "" {
-			return fmt.Errorf("status %q not in {%s}", status, optionList(prop))
+			return fmt.Errorf("%w: got %q, options {%s}", errStatusNotInOptions, status, optionList(prop))
 		}
 		out[prop.id()] = id
 	}
 	if priority != "" {
 		prop := findPropertyByName(board, "priority")
 		if prop == nil || prop.ptype() != propTypeSelect {
-			return errors.New("board has no Priority select property")
+			return errBoardNoPriorityProperty
 		}
 		id := findOptionIDByLabel(prop, priority)
 		if id == "" {
-			return fmt.Errorf("priority %q not in {%s}", priority, optionList(prop))
+			return fmt.Errorf("%w: got %q, options {%s}", errPriorityNotInOptions, priority, optionList(prop))
 		}
 		out[prop.id()] = id
 	}
 	if dueDate != "" {
 		due := findDueDateProperty(board)
 		if due == nil {
-			return errors.New("board has no Deadline / Date property to hold due_date")
+			return errBoardNoDeadlineProperty
 		}
 		t, err := time.Parse("2006-01-02", dueDate)
 		if err != nil {
@@ -2195,9 +2227,9 @@ type updateCardArgs struct {
 	Changes map[string]interface{} `json:"changes"`
 }
 
-// validUpdateChangeKeys lists every recognised key inside `update_card.changes`.
+// validUpdateChangeKeys lists every recognized key inside `update_card.changes`.
 // An unknown key is rejected up-front so a typo ("statuss") doesn't produce a
-// silent no-op (the previous behaviour where everything else was applied and
+// silent no-op (the previous behavior where everything else was applied and
 // the typo was ignored). Keep alphabetical for easy auditing.
 var validUpdateChangeKeys = map[string]struct{}{
 	"assigned_to": {},
@@ -2221,8 +2253,8 @@ func sortedValidUpdateChangeKeys() []string {
 func (s *Server) toolUpdateCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "update_card",
-			Description: "Updates an existing card. Pass `changes` as a dict; recognised keys are title, description, assigned_to, status, priority, due_date, properties — any other key is rejected with the list of valid ones (so a typo never silently no-ops). assigned_to accepts \"me\" (the calling user) or a Mattermost username. status / priority match fuzzily (case-insensitive, leading numeric prefix and emoji ignored). Properties is a partial id->value map merged into the card's existing properties. Returns the updated card in the same shape as get_card_details().",
+			Name:        "update_card",
+			Description: "Updates an existing card. Pass `changes` as a dict; recognized keys are title, description, assigned_to, status, priority, due_date, properties — any other key is rejected with the list of valid ones (so a typo never silently no-ops). assigned_to accepts \"me\" (the calling user) or a Mattermost username. status / priority match fuzzily (case-insensitive, leading numeric prefix and emoji ignored). Properties is a partial id->value map merged into the card's existing properties. Returns the updated card in the same shape as get_card_details().",
 			InputSchema: rawSchema(`{
 				"type": "object",
 				"required": ["card_id", "changes"],
@@ -2241,7 +2273,7 @@ func (s *Server) toolUpdateCard() toolEntry {
 				return toolError("card_id and a non-empty changes object are required"), nil
 			}
 			// Reject unknown keys before doing any work so we never leave a
-			// partial update applied with an unrecognised key dropped.
+			// partial update applied with an unrecognized key dropped.
 			var unknown []string
 			for k := range args.Changes {
 				if _, ok := validUpdateChangeKeys[k]; !ok {
@@ -2261,8 +2293,8 @@ func (s *Server) toolUpdateCard() toolEntry {
 			if !s.backend.HasPermissionToBoard(userID, existing.BoardID, model.PermissionManageBoardCards) {
 				return toolError("permission denied: cannot edit cards on board %s", existing.BoardID), nil
 			}
-			board, err := s.backend.GetBoard(existing.BoardID)
-			if err != nil || board == nil {
+			board, berr := s.backend.GetBoard(existing.BoardID)
+			if berr != nil || board == nil {
 				return toolError("not found: parent board %s", existing.BoardID), nil
 			}
 
@@ -2284,8 +2316,8 @@ func (s *Server) toolUpdateCard() toolEntry {
 			priority, _ := args.Changes["priority"].(string)
 			dueDate, _ := args.Changes["due_date"].(string)
 			if assignedTo != "" || status != "" || priority != "" || dueDate != "" {
-				if err := s.applyConvenienceProps(board, userID, assignedTo, status, priority, dueDate, updatedProps); err != nil {
-					return toolError("%v", err), nil
+				if applyErr := s.applyConvenienceProps(board, userID, assignedTo, status, priority, dueDate, updatedProps); applyErr != nil {
+					return toolError("%v", applyErr), nil
 				}
 			}
 			// Merge with the card's existing properties before sending the
@@ -2341,7 +2373,7 @@ type addCommentArgs struct {
 func (s *Server) toolAddComment() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "add_comment",
+			Name:        "add_comment",
 			Description: "Adds a comment to a card on behalf of the current user. Use this for quick notes / status updates / questions on a specific task instead of editing the description. Returns the new comment_id, card_id, card_link, and the create timestamp.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2377,8 +2409,8 @@ func (s *Server) toolAddComment() toolEntry {
 				CreatedBy:  userID,
 				ModifiedBy: userID,
 			}
-			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
-				return toolError("insert comment: %v", err), nil
+			if ierr := s.backend.InsertBlockAndNotify(block, userID, false); ierr != nil {
+				return toolError("insert comment: %v", ierr), nil
 			}
 			// Re-read the persisted block so we return the real CreateAt the
 			// store assigned, not the zero value the in-memory block had
@@ -2409,7 +2441,7 @@ func (s *Server) toolAddComment() toolEntry {
 func (s *Server) toolListBoardMembers() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "list_board_members",
+			Name:        "list_board_members",
 			Description: "Returns the list of members of a board: user_id, username, role (admin / editor / commenter / viewer). Use this when the user asks who is on a board, when picking an assignee for a new card, or to validate a username before passing it to assigned_to in create_card / update_card.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2456,16 +2488,16 @@ type bulkUpdateChange struct {
 }
 
 type bulkUpdateResult struct {
-	CardID  string       `json:"card_id"`
-	OK      bool         `json:"ok"`
-	Error   string       `json:"error,omitempty"`
-	Card    *cardSummary `json:"card,omitempty"`
+	CardID string       `json:"card_id"`
+	OK     bool         `json:"ok"`
+	Error  string       `json:"error,omitempty"`
+	Card   *cardSummary `json:"card,omitempty"`
 }
 
 func (s *Server) toolBulkUpdateCards() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "bulk_update_cards",
+			Name:        "bulk_update_cards",
 			Description: "Applies the same kind of `changes` map (see update_card) to many cards in one call. Use this for batch operations like moving a list of cards to Done, reassigning everyone's tasks at once, etc. Each item is processed independently — successes return the resolved card, failures return an error string but don't abort the rest.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2503,7 +2535,7 @@ func (s *Server) toolBulkUpdateCards() toolEntry {
 			updateHandler := s.toolUpdateCard().handler
 			results := make([]bulkUpdateResult, 0, len(args.Updates))
 			for _, u := range args.Updates {
-				perCallArgs, _ := json.Marshal(updateCardArgs{CardID: u.CardID, Changes: u.Changes})
+				perCallArgs, _ := json.Marshal(updateCardArgs(u))
 				res, _ := updateHandler(ctx, userID, perCallArgs)
 				if res.IsError {
 					msg := ""
@@ -2541,7 +2573,7 @@ func (s *Server) toolBulkUpdateCards() toolEntry {
 func (s *Server) toolDeleteCard() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "delete_card",
+			Name:        "delete_card",
 			Description: "Deletes a card. This is a soft delete (DeleteAt is set on the underlying block, the row remains for audit / undo). Requires the same manage-board-cards permission as create / update. Returns {ok: true, card_id} on success.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2586,7 +2618,7 @@ func (s *Server) toolDeleteCard() toolEntry {
 func (s *Server) toolReorderCardContent() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "reorder_card_content",
+			Name:        "reorder_card_content",
 			Description: "Replaces the card's content_order — the array that decides the rendered order of subtask / checkbox / text blocks in the card body. Pass ordered_ids as a permutation of the card's current child block ids; missing ids would silently disappear from the UI, so the call rejects partial lists. Use get_card_details() first to read the current ids and types. Returns {ok, card_id, content_order}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2727,7 +2759,7 @@ func (s *Server) loadSubtask(userID, subtaskID string) (*model.Block, *model.Car
 // removeFromContentOrder patches the parent card's ContentOrder to drop a
 // deleted block id. Without this, the card accumulates dangling ids in
 // content_order over time (the webapp tolerates them, but agents that
-// honour content_order chase ghosts). Best-effort — if the patch fails the
+// honor content_order chase ghosts). Best-effort — if the patch fails the
 // soft-delete is still applied and the error is logged but not surfaced
 // (the user-visible delete already succeeded).
 func (s *Server) removeFromContentOrder(card *model.Card, blockID, userID string) {
@@ -2759,7 +2791,7 @@ func (s *Server) removeFromContentOrder(card *model.Card, blockID, userID string
 func (s *Server) toolAddSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "add_subtask",
+			Name:        "add_subtask",
 			Description: "Appends a subtask to a card. title is required. checked defaults to false. Subtasks render as their own row in the card body with a state toggle — semantically the same as a checkbox, but with a separate UI affordance for hierarchical work. Use add_checkbox for plain inline todos. Returns the created subtask in the same shape get_card_details() emits, plus card_link.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2790,8 +2822,8 @@ func (s *Server) toolAddSubtask() toolEntry {
 			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
 				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
 			}
-			board, err := s.backend.GetBoard(card.BoardID)
-			if err != nil || board == nil {
+			board, berr := s.backend.GetBoard(card.BoardID)
+			if berr != nil || board == nil {
 				return toolError("not found: parent board %s", card.BoardID), nil
 			}
 
@@ -2805,8 +2837,8 @@ func (s *Server) toolAddSubtask() toolEntry {
 				CreatedBy:  userID,
 				ModifiedBy: userID,
 			}
-			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
-				return toolError("insert subtask: %v", err), nil
+			if ierr := s.backend.InsertBlockAndNotify(block, userID, false); ierr != nil {
+				return toolError("insert subtask: %v", ierr), nil
 			}
 
 			// Append to the card's contentOrder so the new subtask shows up
@@ -2814,11 +2846,11 @@ func (s *Server) toolAddSubtask() toolEntry {
 			newOrder := append([]string{}, card.ContentOrder...)
 			newOrder = append(newOrder, block.ID)
 			patch := &model.CardPatch{ContentOrder: &newOrder}
-			if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+			if _, perr := s.backend.PatchCard(patch, card.ID, userID, false); perr != nil {
 				s.logger.Warn("mcp: subtask inserted but contentOrder patch failed",
 					mlog.String("card_id", card.ID),
 					mlog.String("subtask_id", block.ID),
-					mlog.Err(err),
+					mlog.Err(perr),
 				)
 			}
 
@@ -2839,7 +2871,7 @@ func (s *Server) toolAddSubtask() toolEntry {
 func (s *Server) toolUpdateSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "update_subtask",
+			Name:        "update_subtask",
 			Description: "Edits a subtask. Pass title to change the text and/or checked to flip the done state. At least one of the two must be provided. Omit a field (don't pass the key) to leave it unchanged — passing checked=false explicitly clears the state, passing checked=true marks it done.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -2911,7 +2943,7 @@ func (s *Server) toolUpdateSubtask() toolEntry {
 func (s *Server) toolDeleteSubtask() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "delete_subtask",
+			Name:        "delete_subtask",
 			Description: "Deletes a subtask block. Soft delete (DeleteAt is set on the underlying block) and the id is removed from the parent card's content_order so it stops showing up in get_card_details(). Requires manage-board-cards permission on the parent board. Returns {ok, subtask_id}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3003,7 +3035,7 @@ func (s *Server) loadCheckbox(userID, checkboxID string) (*model.Block, *model.C
 func (s *Server) toolAddCheckbox() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "add_checkbox",
+			Name:        "add_checkbox",
 			Description: "Appends a checkbox (inline todo) to a card. title is required. checked defaults to false. Checkboxes and subtasks have the same done/not-done state model (Fields.value=bool); pick whichever the user already uses elsewhere on their card — checkboxes for plain todo bullets, add_subtask for hierarchical work that benefits from a separate UI affordance. Returns the created checkbox in the same shape get_card_details() emits, plus card_link.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3034,8 +3066,8 @@ func (s *Server) toolAddCheckbox() toolEntry {
 			if !s.backend.HasPermissionToBoard(userID, card.BoardID, model.PermissionManageBoardCards) {
 				return toolError("permission denied: cannot edit cards on board %s", card.BoardID), nil
 			}
-			board, err := s.backend.GetBoard(card.BoardID)
-			if err != nil || board == nil {
+			board, berr := s.backend.GetBoard(card.BoardID)
+			if berr != nil || board == nil {
 				return toolError("not found: parent board %s", card.BoardID), nil
 			}
 
@@ -3049,18 +3081,18 @@ func (s *Server) toolAddCheckbox() toolEntry {
 				CreatedBy:  userID,
 				ModifiedBy: userID,
 			}
-			if err := s.backend.InsertBlockAndNotify(block, userID, false); err != nil {
-				return toolError("insert checkbox: %v", err), nil
+			if ierr := s.backend.InsertBlockAndNotify(block, userID, false); ierr != nil {
+				return toolError("insert checkbox: %v", ierr), nil
 			}
 
 			newOrder := append([]string{}, card.ContentOrder...)
 			newOrder = append(newOrder, block.ID)
 			patch := &model.CardPatch{ContentOrder: &newOrder}
-			if _, err := s.backend.PatchCard(patch, card.ID, userID, false); err != nil {
+			if _, perr := s.backend.PatchCard(patch, card.ID, userID, false); perr != nil {
 				s.logger.Warn("mcp: checkbox inserted but contentOrder patch failed",
 					mlog.String("card_id", card.ID),
 					mlog.String("checkbox_id", block.ID),
-					mlog.Err(err),
+					mlog.Err(perr),
 				)
 			}
 
@@ -3081,7 +3113,7 @@ func (s *Server) toolAddCheckbox() toolEntry {
 func (s *Server) toolUpdateCheckbox() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "update_checkbox",
+			Name:        "update_checkbox",
 			Description: "Edits a checkbox. Pass title to change the text and/or checked to flip the state. At least one of the two must be provided. Omit a field (don't pass the key) to leave it unchanged — passing checked=false explicitly clears the box.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3153,7 +3185,7 @@ func (s *Server) toolUpdateCheckbox() toolEntry {
 func (s *Server) toolDeleteCheckbox() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "delete_checkbox",
+			Name:        "delete_checkbox",
 			Description: "Deletes a checkbox content block. Soft delete (DeleteAt is set on the underlying block) and the id is removed from the parent card's content_order so it stops showing up in get_card_details(). Requires manage-board-cards permission on the parent board. Returns {ok, checkbox_id}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3196,7 +3228,7 @@ func (s *Server) toolDeleteCheckbox() toolEntry {
 func (s *Server) toolUpdateComment() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "update_comment",
+			Name:        "update_comment",
 			Description: "Edits the text of a comment. Only the comment author can edit; admins must use the Mattermost UI. Returns {ok, comment_id, text}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3261,7 +3293,7 @@ func (s *Server) toolUpdateComment() toolEntry {
 func (s *Server) toolDeleteComment() toolEntry {
 	return toolEntry{
 		def: toolDef{
-			Name: "delete_comment",
+			Name:        "delete_comment",
 			Description: "Deletes a comment. Only the comment author can delete via this tool. Returns {ok, comment_id}.",
 			InputSchema: rawSchema(`{
 				"type": "object",
@@ -3329,23 +3361,23 @@ const attachmentInlineDefault = 5 * 1024 * 1024
 // the agent can decide between dereferencing url and inlining via
 // get_attachment. mime is always populated — falls back to
 // "application/octet-stream" when the upstream file info has no MIME (e.g.,
-// the filename had no recognisable extension).
+// the filename had no recognizable extension).
 type cardAttachment struct {
-	ID          string        `json:"id"`
-	CardID      string        `json:"card_id"`
-	BoardID     string        `json:"board_id"`
-	Kind        string        `json:"kind"`
-	FileID      string        `json:"file_id"`
-	Filename    string        `json:"filename"`
-	Mime        string        `json:"mime"`
-	SizeBytes   int64         `json:"size_bytes"`
-	IsImage     bool          `json:"is_image"`
-	IsVideo     bool          `json:"is_video"`
-	IsAudio     bool          `json:"is_audio"`
-	UploadedBy  *assigneeRef  `json:"uploaded_by,omitempty"`
-	UploadedAt  int64         `json:"uploaded_at,omitempty"`
-	UploadedISO string        `json:"uploaded_iso,omitempty"`
-	URL         string        `json:"url"`
+	ID          string       `json:"id"`
+	CardID      string       `json:"card_id"`
+	BoardID     string       `json:"board_id"`
+	Kind        string       `json:"kind"`
+	FileID      string       `json:"file_id"`
+	Filename    string       `json:"filename"`
+	Mime        string       `json:"mime"`
+	SizeBytes   int64        `json:"size_bytes"`
+	IsImage     bool         `json:"is_image"`
+	IsVideo     bool         `json:"is_video"`
+	IsAudio     bool         `json:"is_audio"`
+	UploadedBy  *assigneeRef `json:"uploaded_by,omitempty"`
+	UploadedAt  int64        `json:"uploaded_at,omitempty"`
+	UploadedISO string       `json:"uploaded_iso,omitempty"`
+	URL         string       `json:"url"`
 }
 
 // fileIDFromBlock returns the storage filename a block points at, tolerating
@@ -3465,16 +3497,16 @@ func (s *Server) attachmentFromBlock(block *model.Block, board *model.Board, fil
 func sanitizeAttachmentFilename(name string) (string, error) {
 	s := strings.TrimSpace(name)
 	if s == "" {
-		return "", errors.New("filename is empty")
+		return "", errFilenameEmpty
 	}
 	if s == "." || s == ".." {
-		return "", errors.New("filename must not be '.' or '..' — pass a real filename")
+		return "", errFilenameDots
 	}
 	if strings.ContainsAny(s, "/\\") {
-		return "", errors.New("filename must not contain path separators ('/' or '\\\\') — pass only the basename")
+		return "", errFilenameSeparators
 	}
 	if strings.Contains(s, "..") {
-		return "", errors.New("filename must not contain '..' (path-traversal marker)")
+		return "", errFilenamePathTraversal
 	}
 	return s, nil
 }

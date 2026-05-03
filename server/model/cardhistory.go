@@ -21,9 +21,9 @@ const (
 	// edits. Lets the renderer show "before -> after" with state labels
 	// resolved from the board's subtaskStates property.
 	HistoryEventSubtaskStateChanged HistoryEventKind = "subtask-state"
-	HistoryEventCommentAdded    HistoryEventKind = "comment-added"
-	HistoryEventCommentEdited   HistoryEventKind = "comment-edited"
-	HistoryEventCommentRemoved  HistoryEventKind = "comment-removed"
+	HistoryEventCommentAdded        HistoryEventKind = "comment-added"
+	HistoryEventCommentEdited       HistoryEventKind = "comment-edited"
+	HistoryEventCommentRemoved      HistoryEventKind = "comment-removed"
 )
 
 // CardHistoryEvent is one entry on the per-card activity timeline. Sent

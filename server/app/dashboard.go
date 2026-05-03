@@ -440,7 +440,7 @@ func readAllTasksFilter(board *model.Board) (ids []string, hasExplicit bool) {
 
 // cardMatchesAssigneeFilter reports whether any of the card's assignee
 // properties contains any of the filter user IDs. Returns false on a card
-// with no person-typed property values, which is the desired behaviour:
+// with no person-typed property values, which is the desired behavior:
 // "All Tasks" is an opt-in roster, so cards with no assignee shouldn't
 // surface in anyone's filtered view.
 func cardMatchesAssigneeFilter(cardProps map[string]interface{}, propIDs []string, filterUserIDs []string) bool {

@@ -153,10 +153,10 @@ func (s *Server) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
-		return errors.New("mcp: server already running")
+		return errServerAlreadyRunning
 	}
 	if s.cfg.Port <= 0 || s.cfg.Port > 65535 {
-		return fmt.Errorf("mcp: invalid port %d", s.cfg.Port)
+		return fmt.Errorf("%w: %d", errInvalidPort, s.cfg.Port)
 	}
 
 	bind := strings.TrimSpace(s.cfg.BindAddress)
@@ -442,13 +442,13 @@ func (s *Server) authenticate(r *http.Request, transport mcpTransport) (string, 
 		}
 		return "", errExternalUnauthenticated
 
-	default:
-		// transportTCP: bearer wins over any header.
+	case transportTCP:
+		// bearer wins over any header.
 		if bearer != "" {
 			if uid, ok := s.resolveBearer(bearer); ok {
 				return uid, nil
 			}
-			return "", errors.New("invalid api key (or expired session token)")
+			return "", errInvalidAPIKey
 		}
 		if !isLoopback(r.RemoteAddr) {
 			return "", errMissingBearerRemote
@@ -461,6 +461,7 @@ func (s *Server) authenticate(r *http.Request, transport mcpTransport) (string, 
 		}
 		return "", errMissingIdentity
 	}
+	return "", errMissingIdentity
 }
 
 // resolveBearer tries the value first as an issued MCP api key, then as a
@@ -499,6 +500,9 @@ var (
 	errMissingBearerLoopback   = errors.New("missing Authorization: Bearer <api-key> (loopback bearer required)")
 	errMissingIdentity         = errors.New("missing X-Mattermost-UserID or Authorization: Bearer <api-key>")
 	errExternalUnauthenticated = errors.New("unauthenticated: external HTTP MCP requests need a Mattermost session cookie (use the direct TCP listener with Bearer api-key for non-cookie clients)")
+	errServerAlreadyRunning    = errors.New("mcp: server already running")
+	errInvalidPort             = errors.New("mcp: invalid port")
+	errInvalidAPIKey           = errors.New("invalid api key (or expired session token)")
 )
 
 // dispatch routes a parsed JSON-RPC request to the matching handler. Returns

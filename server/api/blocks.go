@@ -182,14 +182,14 @@ func (a *API) handleGetBlocks(w http.ResponseWriter, r *http.Request) {
 
 // getSystemBoardBlocks returns the blocks visible on a dashboard ("system")
 // board: the persisted views and content blocks plus the virtual cards
-// synthesised from other boards on the fly. Extracted from handleGetBlocks
+// synthesized from other boards on the fly. Extracted from handleGetBlocks
 // to keep that handler under the gocyclo threshold.
 func (a *API) getSystemBoardBlocks(board *model.Board, userID, blockType, blockID string) ([]*model.Block, error) {
 	realBlocks, err := a.app.GetBlocksForBoard(board.ID)
 	if err != nil {
 		return nil, err
 	}
-	var blocks []*model.Block
+	blocks := make([]*model.Block, 0, len(realBlocks))
 	for _, b := range realBlocks {
 		if b.Type == model.TypeCard {
 			// Persisted card blocks aren't expected on a system board, but skip

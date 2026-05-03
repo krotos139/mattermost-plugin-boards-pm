@@ -63,13 +63,18 @@ var (
 	ErrKeyNotFound     = errors.New("api key not found or revoked")
 	ErrKeyForbidden    = errors.New("not the owner of this key")
 	ErrAmbiguousPrefix = errors.New("hash prefix matches more than one key — use a longer prefix")
+	ErrUserIDRequired  = errors.New("user id required")
+	ErrKVSetKeyhash    = errors.New("kv set keyhash failed")
+	ErrKVList          = errors.New("kv list failed")
+	ErrKVDeleteKeyhash = errors.New("kv delete keyhash failed")
+	ErrKVGetKeyhash    = errors.New("kv get keyhash failed")
 )
 
 // IssueKey generates a fresh random key, persists meta, and returns the
 // plaintext (shown once) plus the meta record.
 func (k *KeyStore) IssueKey(userID, description string) (string, *KeyMeta, error) {
 	if userID == "" {
-		return "", nil, errors.New("user id required")
+		return "", nil, ErrUserIDRequired
 	}
 	plaintext, err := generateKeyPlaintext()
 	if err != nil {
@@ -86,7 +91,7 @@ func (k *KeyStore) IssueKey(userID, description string) (string, *KeyMeta, error
 		return "", nil, fmt.Errorf("marshal key meta: %w", err)
 	}
 	if _, appErr := k.api.KVSetWithOptions(keyHashPrefix+meta.Hash, metaBytes, mm_model.PluginKVSetOptions{}); appErr != nil {
-		return "", nil, fmt.Errorf("kv set keyhash: %s", appErr.Message)
+		return "", nil, fmt.Errorf("%w: %s", ErrKVSetKeyhash, appErr.Message)
 	}
 	return plaintext, meta, nil
 }
@@ -127,7 +132,7 @@ func (k *KeyStore) ListAllKeys() ([]*KeyMeta, error) {
 	for {
 		batch, appErr := k.api.KVList(page, kvListBatch)
 		if appErr != nil {
-			return nil, fmt.Errorf("kv list: %s", appErr.Message)
+			return nil, fmt.Errorf("%w: %s", ErrKVList, appErr.Message)
 		}
 		if len(batch) == 0 {
 			break
@@ -187,7 +192,7 @@ func (k *KeyStore) revokeByHash(callerUserID, hash string, isAdmin bool) error {
 		return ErrKeyForbidden
 	}
 	if appErr := k.api.KVDelete(keyHashPrefix + meta.Hash); appErr != nil {
-		return fmt.Errorf("kv delete keyhash: %s", appErr.Message)
+		return fmt.Errorf("%w: %s", ErrKVDeleteKeyhash, appErr.Message)
 	}
 	return nil
 }
@@ -198,7 +203,7 @@ func (k *KeyStore) findByHash(hash string) (*KeyMeta, error) {
 	}
 	raw, appErr := k.api.KVGet(keyHashPrefix + hash)
 	if appErr != nil {
-		return nil, fmt.Errorf("kv get keyhash: %s", appErr.Message)
+		return nil, fmt.Errorf("%w: %s", ErrKVGetKeyhash, appErr.Message)
 	}
 	if len(raw) == 0 {
 		return nil, ErrKeyNotFound

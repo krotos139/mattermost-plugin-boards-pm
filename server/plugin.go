@@ -34,17 +34,20 @@ const (
 	mcpDefaultListenAddr        = "127.0.0.1:8975"
 )
 
-var ErrPluginNotAllowed = errors.New("boards plugin not allowed while Boards product enabled")
+var (
+	ErrPluginNotAllowed = errors.New("boards plugin not allowed while Boards product enabled")
+	errPortOutOfRange   = errors.New("port out of range")
+)
 
 // Plugin implements the interface expected by the Mattermost server to communicate between the server and plugin processes.
 type Plugin struct {
 	plugin.MattermostPlugin
-	boardsApp   *boards.BoardsApp
-	handoff     *handoff.Service
-	mcpServer   *mcp.Server
-	mcpKeys     *mcp.KeyStore
-	mcpLogger   mlog.LoggerIFace
-	appliedMCP  mcpAppliedConfig
+	boardsApp  *boards.BoardsApp
+	handoff    *handoff.Service
+	mcpServer  *mcp.Server
+	mcpKeys    *mcp.KeyStore
+	mcpLogger  mlog.LoggerIFace
+	appliedMCP mcpAppliedConfig
 }
 
 // mcpAppliedConfig is the snapshot of MCP-related plugin settings that the
@@ -207,7 +210,7 @@ func splitListenAddr(s string) (string, int, error) {
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 0 || port > 65535 {
-		return "", 0, fmt.Errorf("port %q out of range", portStr)
+		return "", 0, fmt.Errorf("%w: %q", errPortOutOfRange, portStr)
 	}
 	if strings.TrimSpace(host) == "" {
 		host = "127.0.0.1"
